@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
 import { 
   ArrowLeft, Globe, RefreshCw, AlertTriangle, 
-  CheckCircle2, Info, Loader2, ExternalLink, Calendar
+  CheckCircle2, Info, Loader2, ExternalLink, Calendar,
+  ShieldAlert, ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED'>('ALL');
 
   const fetchWebsiteDetails = useCallback(async () => {
     try {
@@ -69,7 +71,6 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
         const data = await res.json();
         throw new Error(data.error || "Failed to run scan");
       }
-      // Re-fetch details to get the new scan
       await fetchWebsiteDetails();
     } catch (err: any) {
       setError(err.message);
@@ -101,11 +102,21 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
 
   const latestScan = website.scans[0];
   const hostname = new URL(website.url).hostname;
+  
+  // Categorize issues
+  const failedAudits = latestScan?.seoIssues.filter(i => !i.passed) || [];
+  const passedAudits = latestScan?.seoIssues.filter(i => i.passed) || [];
+
+  const displayAudits = activeTab === 'ALL' 
+    ? latestScan?.seoIssues || [] 
+    : activeTab === 'FAILED' 
+      ? failedAudits 
+      : passedAudits;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Link 
             href="/dashboard"
@@ -127,94 +138,148 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
         <button
           onClick={handleScan}
           disabled={isScanning || latestScan?.status === "RUNNING"}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
         >
           {isScanning || latestScan?.status === "RUNNING" ? (
             <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</>
           ) : (
-            <><RefreshCw className="h-4 w-4" /> Run New Scan</>
+            <><RefreshCw className="h-4 w-4" /> Run Technical Audit</>
           )}
         </button>
       </div>
 
       {/* Main Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="col-span-1 bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-6 relative overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="col-span-1 bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-6 relative overflow-hidden flex flex-col justify-center">
           <div className="absolute -right-6 -top-6 opacity-[0.03] dark:opacity-10">
-            <Globe className="w-32 h-32 text-indigo-500" />
+            <Globe className="w-40 h-40 text-indigo-500" />
           </div>
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Overall SEO Score</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Technical Health Score</h3>
           <div className="flex items-baseline gap-2">
             <span className={cn(
-              "text-5xl font-black tracking-tight",
+              "text-6xl font-black tracking-tight",
               latestScan?.overallScore === null ? "text-gray-300 dark:text-gray-700" :
               latestScan!.overallScore >= 80 ? "text-emerald-500" :
               latestScan!.overallScore >= 50 ? "text-yellow-500" : "text-red-500"
             )}>
               {latestScan?.overallScore !== null ? latestScan.overallScore : "--"}
             </span>
-            <span className="text-lg text-gray-400 font-medium">/ 100</span>
+            <span className="text-xl text-gray-400 font-medium">/ 100</span>
           </div>
-          <div className="mt-4 flex items-center text-xs text-gray-500 dark:text-gray-400">
-            <Calendar className="h-3.5 w-3.5 mr-1.5" />
-            Last scanned: {latestScan?.completedAt ? new Date(latestScan.completedAt).toLocaleString() : "Never"}
+          <div className="mt-6 flex items-center text-xs font-medium text-gray-500 dark:text-gray-400">
+            <Calendar className="h-4 w-4 mr-1.5" />
+            Last audit: {latestScan?.completedAt ? new Date(latestScan.completedAt).toLocaleString() : "Never"}
           </div>
         </div>
 
-        <div className="col-span-2 bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-6">
-           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-4">Issues Summary</h3>
-           {latestScan?.seoIssues ? (
-             <div className="grid grid-cols-3 gap-4">
-               {['ERROR', 'WARNING', 'INFO'].map(sev => {
-                 const count = latestScan.seoIssues.filter(i => (sev === 'ERROR' ? !i.passed && i.severity === 'FAILED' : sev === 'WARNING' ? !i.passed && i.severity === 'WARNING' : i.passed)).length;
-                 const colors = {
-                   ERROR: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30 text-red-600 dark:text-red-400",
-                   WARNING: "bg-yellow-50 dark:bg-yellow-500/10 border-yellow-200 dark:border-yellow-500/30 text-yellow-600 dark:text-yellow-400",
-                   INFO: "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
-                 };
-                 return (
-                   <div key={sev} className={cn("p-4 rounded-lg border flex flex-col items-center justify-center text-center", colors[sev as keyof typeof colors])}>
-                     <span className="text-2xl font-bold mb-1">{count}</span>
-                     <span className="text-xs font-medium uppercase tracking-wider">{sev === 'ERROR' ? 'Failed Checks' : sev === 'WARNING' ? 'Warnings' : 'Passed'}</span>
-                   </div>
-                 )
-               })}
+        <div className="col-span-1 lg:col-span-2 grid grid-cols-2 gap-4">
+           {/* Failed Overview */}
+           <div className="bg-red-50 dark:bg-red-500/5 border border-red-100 dark:border-red-500/20 rounded-xl p-6 flex flex-col justify-center">
+             <div className="flex items-center gap-3 mb-2">
+               <div className="p-2 bg-red-100 dark:bg-red-500/20 rounded-lg text-red-600 dark:text-red-400">
+                 <ShieldAlert className="h-5 w-5" />
+               </div>
+               <h3 className="text-sm font-bold text-red-900 dark:text-red-400 uppercase tracking-wide">Action Required</h3>
              </div>
-           ) : (
-             <div className="h-24 flex items-center justify-center text-sm text-gray-400">No scan data available</div>
-           )}
+             <div className="text-3xl font-black text-red-600 dark:text-red-500 mt-2">{failedAudits.length}</div>
+             <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-1 font-medium">Audits failed or need improvement</p>
+           </div>
+           
+           {/* Passed Overview */}
+           <div className="bg-emerald-50 dark:bg-emerald-500/5 border border-emerald-100 dark:border-emerald-500/20 rounded-xl p-6 flex flex-col justify-center">
+             <div className="flex items-center gap-3 mb-2">
+               <div className="p-2 bg-emerald-100 dark:bg-emerald-500/20 rounded-lg text-emerald-600 dark:text-emerald-400">
+                 <ShieldCheck className="h-5 w-5" />
+               </div>
+               <h3 className="text-sm font-bold text-emerald-900 dark:text-emerald-400 uppercase tracking-wide">Passed Audits</h3>
+             </div>
+             <div className="text-3xl font-black text-emerald-600 dark:text-emerald-500 mt-2">{passedAudits.length}</div>
+             <p className="text-xs text-emerald-600/80 dark:text-emerald-400/80 mt-1 font-medium">Successful technical checks</p>
+           </div>
         </div>
       </div>
 
-      {/* Detailed Issues Table */}
+      {/* Detailed Rich Report */}
       <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-white/10">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Scan Results</h2>
+        <div className="px-2 sm:px-6 py-4 border-b border-gray-200 dark:border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white px-4 sm:px-0">Full Technical Report</h2>
+          
+          <div className="flex bg-gray-100 dark:bg-white/5 p-1 rounded-lg mx-4 sm:mx-0">
+            <button 
+              onClick={() => setActiveTab('ALL')}
+              className={cn("px-4 py-1.5 text-xs font-medium rounded-md transition-colors", activeTab === 'ALL' ? "bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}
+            >
+              All ({latestScan?.seoIssues?.length || 0})
+            </button>
+            <button 
+              onClick={() => setActiveTab('FAILED')}
+              className={cn("px-4 py-1.5 text-xs font-medium rounded-md transition-colors", activeTab === 'FAILED' ? "bg-white dark:bg-white/10 text-red-600 dark:text-red-400 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}
+            >
+              Issues ({failedAudits.length})
+            </button>
+            <button 
+              onClick={() => setActiveTab('PASSED')}
+              className={cn("px-4 py-1.5 text-xs font-medium rounded-md transition-colors", activeTab === 'PASSED' ? "bg-white dark:bg-white/10 text-emerald-600 dark:text-emerald-400 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}
+            >
+              Passed ({passedAudits.length})
+            </button>
+          </div>
         </div>
         
         {!latestScan?.seoIssues || latestScan.seoIssues.length === 0 ? (
-          <div className="p-12 text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-700 mb-3" />
-            <p className="text-gray-500 dark:text-gray-400">Run a scan to see detailed SEO issues.</p>
+          <div className="p-16 text-center">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-700 mb-4" />
+            <p className="text-gray-500 dark:text-gray-400 font-medium">Run a technical audit to generate the report.</p>
           </div>
+        ) : displayAudits.length === 0 ? (
+           <div className="p-12 text-center text-gray-500 dark:text-gray-400">
+             No audits found in this category.
+           </div>
         ) : (
           <div className="divide-y divide-gray-100 dark:divide-white/5">
-            {latestScan.seoIssues.map((issue) => (
-              <div key={issue.id} className="p-4 sm:px-6 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors flex items-start gap-4">
+            {displayAudits.map((issue) => (
+              <div key={issue.id} className={cn(
+                "p-5 sm:px-6 transition-colors flex flex-col sm:flex-row items-start gap-4",
+                !issue.passed ? "bg-red-50/30 hover:bg-red-50/60 dark:bg-red-500/5 dark:hover:bg-red-500/10" : "hover:bg-gray-50 dark:hover:bg-white/[0.02]"
+              )}>
                 <div className="mt-0.5 flex-shrink-0">
                   {issue.passed ? (
-                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                    <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                    </div>
                   ) : issue.severity === 'FAILED' ? (
-                    <AlertTriangle className="h-5 w-5 text-red-500" />
+                    <div className="w-8 h-8 rounded-full bg-red-100 dark:bg-red-500/20 flex items-center justify-center">
+                      <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                    </div>
                   ) : (
-                    <Info className="h-5 w-5 text-yellow-500" />
+                    <div className="w-8 h-8 rounded-full bg-yellow-100 dark:bg-yellow-500/20 flex items-center justify-center">
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </div>
                   )}
                 </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
-                    {issue.checkType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                  </h4>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">{issue.details}</p>
+                <div className="flex-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-1">
+                    <h4 className={cn(
+                      "text-sm font-bold tracking-tight",
+                      !issue.passed ? "text-gray-900 dark:text-white" : "text-gray-700 dark:text-gray-300"
+                    )}>
+                      {issue.checkType.replace(/_/g, ' ').toUpperCase()}
+                    </h4>
+                    {!issue.passed && (
+                       <span className={cn(
+                         "inline-flex self-start px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
+                         issue.severity === 'FAILED' ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400"
+                       )}>
+                         {issue.severity === 'FAILED' ? 'Error' : 'Warning'}
+                       </span>
+                    )}
+                  </div>
+                  <p className={cn(
+                    "text-sm leading-relaxed",
+                    !issue.passed ? "text-gray-800 dark:text-gray-200" : "text-gray-500 dark:text-gray-400"
+                  )}>
+                    {issue.details}
+                  </p>
                 </div>
               </div>
             ))}
