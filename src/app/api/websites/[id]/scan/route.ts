@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { crawlAndScore } from "@/lib/crawler/engine";
+import { createNotification, isAlertEnabled } from "@/lib/notifications";
 
 export async function POST(
   req: NextRequest,
@@ -10,15 +11,10 @@ export async function POST(
   try {
     const { id: websiteId } = await params;
     
-    // Auth check
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // Verify ownership
     const dbUser = await prisma.user.findUnique({ where: { email: user.email! } });
     if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
@@ -26,15 +22,10 @@ export async function POST(
       where: { id: websiteId },
       include: { organization: { include: { members: true } } },
     });
-
-    if (!website) {
-      return NextResponse.json({ error: "Website not found" }, { status: 404 });
-    }
+    if (!website) return NextResponse.json({ error: "Website not found" }, { status: 404 });
 
     const isMember = website.organization.members.some(m => m.userId === dbUser.id);
-    if (!isMember) {
-      return NextResponse.json({ error: "Unauthorized to scan this website" }, { status: 403 });
-    }
+    if (!isMember) return NextResponse.json({ error: "Unauthorized to scan this website" }, { status: 403 });
 
     // Fetch previous scan for Change Detection
     const previousScan = await prisma.scan.findFirst({
@@ -42,29 +33,16 @@ export async function POST(
       orderBy: { createdAt: 'desc' }
     });
 
-    // Create a new scan record
     const scan = await prisma.scan.create({
-      data: {
-        websiteId,
-        status: "RUNNING",
-        startedAt: new Date(),
-      },
+      data: { websiteId, status: "RUNNING", startedAt: new Date() },
     });
 
     try {
-      // 1. Run the crawler (crawls up to 20 pages)
       const result = await crawlAndScore(website.url, websiteId, 20);
 
-      // 2. Process each crawled page
       for (const crawledPage of result.pages) {
-        // Save the page content to the DB for Keyword Gap Analysis
         const page = await prisma.page.upsert({
-          where: {
-            websiteId_url: {
-              websiteId,
-              url: crawledPage.url,
-            },
-          },
+          where: { websiteId_url: { websiteId, url: crawledPage.url } },
           update: {
             title: crawledPage.title,
             metaDesc: crawledPage.metaDesc,
@@ -81,59 +59,57 @@ export async function POST(
           },
         });
 
-        // 3. Save the SeoIssues for this page
-        const seoIssuesData = crawledPage.issues.map(issue => ({
-          scanId: scan.id,
-          pageId: page.id,
-          checkType: issue.ruleId,
-          passed: issue.passed,
-          severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
-          details: issue.details,
-        }));
-
         await prisma.seoIssue.createMany({
-          data: seoIssuesData as any,
+          data: crawledPage.issues.map(issue => ({
+            scanId: scan.id,
+            pageId: page.id,
+            checkType: issue.ruleId,
+            passed: issue.passed,
+            severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
+            details: issue.details,
+          })) as any,
         });
       }
 
-      // 4. Update the Scan with completion status and score
       const updatedScan = await prisma.scan.update({
         where: { id: scan.id },
-        data: {
-          status: "COMPLETED",
-          completedAt: new Date(),
-          overallScore: result.overallScore,
-        },
+        data: { status: "COMPLETED", completedAt: new Date(), overallScore: result.overallScore },
       });
 
-      // 5. Change Detection (Compare to previous scan)
+      // ── Change Detection + Notifications ─────────────────────────────────
+      const hostname = new URL(website.url).hostname;
+
       if (previousScan && previousScan.overallScore !== null) {
-        if (previousScan.overallScore !== result.overallScore) {
-          const impact = Math.abs(previousScan.overallScore - result.overallScore) > 10 ? "high" : "low";
-          
+        const scoreDiff = result.overallScore - previousScan.overallScore;
+
+        if (scoreDiff !== 0) {
+          const impact = Math.abs(scoreDiff) > 10 ? "high" : "low";
           await prisma.seoChange.create({
-            data: {
-              websiteId,
-              field: "score",
-              before: previousScan.overallScore.toString(),
-              after: result.overallScore.toString(),
-              impact: impact
-            }
+            data: { websiteId, field: "score", before: previousScan.overallScore.toString(), after: result.overallScore.toString(), impact }
           });
+
+          // Fire score_drop notification if score dropped
+          if (scoreDiff < 0 && await isAlertEnabled(dbUser.id, "score_drop")) {
+            await createNotification({
+              userId: dbUser.id,
+              organizationId: website.organizationId,
+              type: "score_drop",
+              message: `⬇ SEO score for ${hostname} dropped from ${previousScan.overallScore} to ${result.overallScore} (${Math.abs(scoreDiff)} point drop).`,
+              userEmail: user.email ?? undefined,
+              slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
+              discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
+            });
+          }
         }
       }
 
       return NextResponse.json({ scan: updatedScan });
-      
+
     } catch (crawlerError: any) {
-      // Handle crawler failure
       console.error("Crawler error:", crawlerError);
       const failedScan = await prisma.scan.update({
         where: { id: scan.id },
-        data: {
-          status: "FAILED",
-          completedAt: new Date(),
-        },
+        data: { status: "FAILED", completedAt: new Date() },
       });
       return NextResponse.json({ error: "Crawler failed", scan: failedScan }, { status: 500 });
     }
