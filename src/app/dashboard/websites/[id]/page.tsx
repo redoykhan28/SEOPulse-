@@ -71,22 +71,57 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
     fetchWebsiteDetails();
   }, [fetchWebsiteDetails]);
 
+  const [scanProgress, setScanProgress] = useState<{ pagesCrawled: number; queueSize: number } | null>(null);
+
+  const processChunk = async (scanId: string) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/scan/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scanId })
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || "Failed to process scan chunk");
+
+      if (data.status === "RUNNING") {
+        setScanProgress(prev => ({
+          pagesCrawled: (prev?.pagesCrawled || 0) + data.pagesCrawledThisChunk,
+          queueSize: data.remainingQueue
+        }));
+        // Automatically call the next chunk
+        setTimeout(() => processChunk(scanId), 1000);
+      } else if (data.status === "COMPLETED") {
+        setScanProgress(null);
+        setIsScanning(false);
+        await fetchWebsiteDetails();
+      }
+    } catch (err: any) {
+      setError(err.message);
+      setIsScanning(false);
+      setScanProgress(null);
+    }
+  };
+
   const handleScan = async () => {
     setIsScanning(true);
     setError("");
+    setScanProgress({ pagesCrawled: 0, queueSize: 1 }); // initial state
+    
     try {
-      const res = await fetch(`/api/websites/${websiteId}/scan`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to run scan");
-      }
-      await fetchWebsiteDetails();
+      const res = await fetch(`/api/websites/${websiteId}/scan`, { method: "POST" });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || "Failed to initialize scan");
+      
+      // Start processing chunks
+      await processChunk(data.scanId);
+
     } catch (err: any) {
       setError(err.message);
-    } finally {
       setIsScanning(false);
+      setScanProgress(null);
     }
   };
 
@@ -159,7 +194,12 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
             className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
           >
             {isScanning || latestScan?.status === "RUNNING" ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Crawling Site...</>
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> 
+                {scanProgress 
+                  ? `Scanning... (${scanProgress.pagesCrawled} done, ${scanProgress.queueSize} remaining)` 
+                  : 'Starting Crawl...'}
+              </>
             ) : (
               <><RefreshCw className="h-4 w-4" /> Run Deep Audit</>
             )}

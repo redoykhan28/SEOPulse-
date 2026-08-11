@@ -1,6 +1,5 @@
 import * as cheerio from 'cheerio';
 import { seoRules, RuleResult } from './rules';
-import { calculateScore } from './scorer';
 import { prisma } from '../prisma';
 
 export interface CrawledPage {
@@ -18,51 +17,56 @@ export interface CrawledPage {
   }[];
 }
 
-export interface ScanResult {
-  overallScore: number;
-  pages: CrawledPage[];
-}
-
 function normalizeUrl(baseUrl: string, href: string): string | null {
   try {
     const url = new URL(href, baseUrl);
-    // Only crawl HTTP/HTTPS
     if (!url.protocol.startsWith('http')) return null;
-    // Strip hash and normalize trailing slash for deduplication
-    url.hash = '';
-    return url.href.replace(/\/$/, '');
+    url.hash = ''; // Remove hash
+    return url.href.replace(/\/$/, ''); // Remove trailing slash
   } catch {
     return null;
   }
 }
 
-export async function crawlAndScore(startUrl: string, websiteId: string, maxPages: number = 20): Promise<ScanResult> {
-  const visited = new Set<string>();
-  const queue = [startUrl];
-  const pages: CrawledPage[] = [];
-  let startUrlObj: URL;
-  
-  try {
-    startUrlObj = new URL(startUrl);
-  } catch (e) {
-    throw new Error("Invalid start URL");
-  }
+/**
+ * Stateful crawler that processes a chunk of URLs from the Scan queue.
+ * @param scanId The ID of the Scan in the DB
+ * @param maxChunkSize Maximum number of pages to crawl in this invocation
+ */
+export async function processCrawlChunk(scanId: string, maxChunkSize: number = 20): Promise<{
+  pagesCrawled: number;
+  remainingQueue: number;
+  isComplete: boolean;
+}> {
+  const scan = await prisma.scan.findUnique({
+    where: { id: scanId },
+    include: { website: true },
+  });
 
-  while (queue.length > 0 && visited.size < maxPages) {
-    const currentUrl = queue.shift()!;
-    const normalizedCurrent = normalizeUrl(startUrl, currentUrl);
+  if (!scan) throw new Error("Scan not found");
+
+  const startUrlObj = new URL(scan.website.url);
+  
+  // Parse queues from DB (defaulting if null)
+  let pendingUrls: string[] = scan.pendingUrls ? JSON.parse(scan.pendingUrls) : [normalizeUrl(scan.website.url, scan.website.url)!];
+  let scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
+  
+  const visited = new Set<string>(scannedUrls);
+  let pagesCrawledThisChunk = 0;
+
+  // Process up to maxChunkSize URLs
+  while (pendingUrls.length > 0 && pagesCrawledThisChunk < maxChunkSize) {
+    const currentUrl = pendingUrls.shift()!;
     
-    if (!normalizedCurrent || visited.has(normalizedCurrent)) {
-      continue;
-    }
+    // Skip if already visited
+    if (visited.has(currentUrl)) continue;
     
-    visited.add(normalizedCurrent);
-    
+    visited.add(currentUrl);
+    pagesCrawledThisChunk++;
+
     try {
       const response = await fetch(currentUrl, {
-        headers: {
-          'User-Agent': 'SEOPulseBot/2.0',
-        },
+        headers: { 'User-Agent': 'SEOPulseBot/3.0' },
       });
       
       if (!response.ok) {
@@ -73,14 +77,13 @@ export async function crawlAndScore(startUrl: string, websiteId: string, maxPage
       const html = await response.text();
       const $ = cheerio.load(html);
       
-      // Extract Content for Keyword Analysis
+      // Extract Content
       const title = $('title').text().trim() || null;
       const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
       const h1 = $('h1').first().text().trim() || null;
       
-      // Extract visible text (strip scripts and styles)
       $('script, style, noscript').remove();
-      const textContent = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null; // limit to 10k chars
+      const textContent = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
 
       // Evaluate SEO rules
       const results: Record<string, RuleResult> = {};
@@ -89,7 +92,6 @@ export async function crawlAndScore(startUrl: string, websiteId: string, maxPage
       for (const rule of seoRules) {
         const result = rule.evaluate($);
         results[rule.id] = result;
-        
         issues.push({
           ruleId: rule.id,
           passed: result.passed,
@@ -98,27 +100,38 @@ export async function crawlAndScore(startUrl: string, websiteId: string, maxPage
         });
       }
 
-      pages.push({
-        url: currentUrl,
-        title,
-        metaDesc,
-        h1,
-        textContent,
-        results,
-        issues
+      // Save the Page to DB
+      const page = await prisma.page.upsert({
+        where: {
+          websiteId_url: { websiteId: scan.websiteId, url: currentUrl },
+        },
+        update: { title, metaDesc, h1, textContent },
+        create: { websiteId: scan.websiteId, url: currentUrl, title, metaDesc, h1, textContent },
       });
 
-      // Extract internal links to add to queue
+      // Save Issues to DB
+      await prisma.seoIssue.createMany({
+        data: issues.map(issue => ({
+          scanId: scan.id,
+          pageId: page.id,
+          checkType: issue.ruleId,
+          passed: issue.passed,
+          severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
+          details: issue.details,
+        })) as any,
+      });
+
+      // Extract new internal links
       $('a').each((_, el) => {
         const href = $(el).attr('href');
         if (href) {
-          const absoluteUrl = normalizeUrl(startUrl, href);
+          const absoluteUrl = normalizeUrl(scan.website.url, href);
           if (absoluteUrl) {
             const urlObj = new URL(absoluteUrl);
-            // Only add internal links to the same host
+            // Only add internal links to the exact same hostname
             if (urlObj.hostname === startUrlObj.hostname) {
-              if (!visited.has(absoluteUrl) && !queue.includes(absoluteUrl)) {
-                queue.push(absoluteUrl);
+              if (!visited.has(absoluteUrl) && !pendingUrls.includes(absoluteUrl)) {
+                pendingUrls.push(absoluteUrl);
               }
             }
           }
@@ -130,15 +143,22 @@ export async function crawlAndScore(startUrl: string, websiteId: string, maxPage
     }
   }
 
-  // Calculate overall score (average of all page scores)
-  let totalScore = 0;
-  for (const page of pages) {
-    totalScore += calculateScore(page.results);
-  }
-  const overallScore = pages.length > 0 ? Math.round(totalScore / pages.length) : 0;
+  // Deduplicate and save queues back to DB
+  pendingUrls = [...new Set(pendingUrls)].filter(u => !visited.has(u));
+  scannedUrls = Array.from(visited);
+  const isComplete = pendingUrls.length === 0;
+
+  await prisma.scan.update({
+    where: { id: scan.id },
+    data: {
+      pendingUrls: JSON.stringify(pendingUrls),
+      scannedUrls: JSON.stringify(scannedUrls),
+    },
+  });
 
   return {
-    overallScore,
-    pages,
+    pagesCrawled: pagesCrawledThisChunk,
+    remainingQueue: pendingUrls.length,
+    isComplete,
   };
 }

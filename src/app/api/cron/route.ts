@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { crawlAndScore } from "@/lib/crawler/engine";
-import { createNotification, isAlertEnabled } from "@/lib/notifications";
 
 // This route is called by Vercel Cron — secured with CRON_SECRET
 export async function GET(req: NextRequest) {
@@ -21,90 +19,47 @@ export async function GET(req: NextRequest) {
 
   const websites = await prisma.website.findMany({
     where: { scanFrequency: { in: frequenciesToRun as any } },
-    include: { organization: { include: { members: { include: { user: true } } } } },
   });
 
-  console.log(`[CRON] Running scheduled scans for ${websites.length} websites (${frequenciesToRun.join(", ")})`);
+  console.log(`[CRON] Initializing scheduled scans for ${websites.length} websites (${frequenciesToRun.join(", ")})`);
 
-  const results = [];
+  let initializedCount = 0;
   for (const website of websites) {
     try {
       // Check if already scanned within the last 23 hours (prevent duplicate runs)
       const recentScan = await prisma.scan.findFirst({
         where: { websiteId: website.id, createdAt: { gte: new Date(Date.now() - 23 * 60 * 60 * 1000) } },
       });
-      if (recentScan) {
-        results.push({ websiteId: website.id, skipped: true });
-        continue;
-      }
-
-      const previousScan = await prisma.scan.findFirst({
-        where: { websiteId: website.id, status: "COMPLETED" },
-        orderBy: { createdAt: 'desc' },
-      });
+      if (recentScan) continue;
 
       const scan = await prisma.scan.create({
-        data: { websiteId: website.id, status: "RUNNING", startedAt: new Date() },
+        data: { 
+          websiteId: website.id, 
+          status: "RUNNING", 
+          startedAt: new Date(),
+          pendingUrls: JSON.stringify([website.url]),
+          scannedUrls: JSON.stringify([])
+        },
       });
 
-      const result = await crawlAndScore(website.url, website.id, 20);
-
-      for (const crawledPage of result.pages) {
-        const page = await prisma.page.upsert({
-          where: { websiteId_url: { websiteId: website.id, url: crawledPage.url } },
-          update: { title: crawledPage.title, metaDesc: crawledPage.metaDesc, h1: crawledPage.h1, textContent: crawledPage.textContent },
-          create: { websiteId: website.id, url: crawledPage.url, title: crawledPage.title, metaDesc: crawledPage.metaDesc, h1: crawledPage.h1, textContent: crawledPage.textContent },
-        });
-        await prisma.seoIssue.createMany({
-          data: crawledPage.issues.map(issue => ({
-            scanId: scan.id,
-            pageId: page.id,
-            checkType: issue.ruleId,
-            passed: issue.passed,
-            severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
-            details: issue.details,
-          })) as any,
-        });
-      }
-
-      await prisma.scan.update({
-        where: { id: scan.id },
-        data: { status: "COMPLETED", completedAt: new Date(), overallScore: result.overallScore },
-      });
-
-      // Change detection & notify each owner/manager
-      if (previousScan?.overallScore !== null && previousScan?.overallScore !== undefined) {
-        const scoreDiff = result.overallScore - previousScan.overallScore;
-        if (scoreDiff !== 0) {
-          await prisma.seoChange.create({
-            data: { websiteId: website.id, field: "score", before: previousScan.overallScore.toString(), after: result.overallScore.toString(), impact: Math.abs(scoreDiff) > 10 ? "high" : "low" }
-          });
-
-          if (scoreDiff < 0) {
-            const hostname = new URL(website.url).hostname;
-            for (const member of website.organization.members) {
-              if (await isAlertEnabled(member.userId, "score_drop")) {
-                await createNotification({
-                  userId: member.userId,
-                  organizationId: website.organizationId,
-                  type: "score_drop",
-                  message: `[Scheduled Scan] SEO score for ${hostname} dropped from ${previousScan.overallScore} to ${result.overallScore}.`,
-                  userEmail: member.user.email,
-                  slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
-                  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
-                });
-              }
-            }
-          }
-        }
-      }
-
-      results.push({ websiteId: website.id, score: result.overallScore, pagesScanned: result.pages.length });
+      // API CHAINING: Trigger the process endpoint asynchronously
+      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `http://${req.headers.get('host')}`;
+      
+      // Fire and forget (fetch without await)
+      fetch(`${baseUrl}/api/cron/process`, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.CRON_SECRET}`
+        },
+        body: JSON.stringify({ scanId: scan.id })
+      }).catch(e => console.error("Failed to kick off background chunk:", e));
+      
+      initializedCount++;
     } catch (err: any) {
-      console.error(`[CRON] Failed to scan ${website.url}:`, err.message);
-      results.push({ websiteId: website.id, error: err.message });
+      console.error(`[CRON] Failed to initialize scan for ${website.url}:`, err.message);
     }
   }
 
-  return NextResponse.json({ ran: results.length, results });
+  return NextResponse.json({ initialized: initializedCount });
 }

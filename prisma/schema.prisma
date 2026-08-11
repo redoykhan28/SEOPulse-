@@ -116,6 +116,11 @@ model Scan {
   websiteId    String
   status       ScanStatus @default(PENDING)
   overallScore Int?
+  
+  // Queue state for deep crawling
+  pendingUrls  String?    // JSON string array of URLs to crawl
+  scannedUrls  String?    // JSON string array of URLs already crawled
+  
   startedAt    DateTime?
   completedAt  DateTime?
   createdAt    DateTime   @default(now())
