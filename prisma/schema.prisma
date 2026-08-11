@@ -88,11 +88,15 @@ model Website {
 }
 
 model Page {
-  id        String   @id @default(cuid())
-  websiteId String
-  url       String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(cuid())
+  websiteId     String
+  url           String
+  title         String?
+  metaDesc      String?
+  h1            String?
+  textContent   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   website   Website    @relation(fields: [websiteId], references: [id], onDelete: Cascade)
   seoIssues SeoIssue[]

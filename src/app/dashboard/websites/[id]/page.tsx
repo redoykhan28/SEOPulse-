@@ -26,11 +26,21 @@ type Scan = {
   seoIssues: SeoIssue[];
 };
 
+type SeoChange = {
+  id: string;
+  field: string;
+  before: string | null;
+  after: string | null;
+  impact: string | null;
+  createdAt: string;
+};
+
 type WebsiteDetails = {
   id: string;
   url: string;
   scanFrequency: string;
   scans: Scan[];
+  seoChanges: SeoChange[];
 };
 
 export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -41,7 +51,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED'>('ALL');
+  const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
 
   const fetchWebsiteDetails = useCallback(async () => {
     try {
@@ -135,17 +145,25 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
         
-        <button
-          onClick={handleScan}
-          disabled={isScanning || latestScan?.status === "RUNNING"}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
-        >
-          {isScanning || latestScan?.status === "RUNNING" ? (
-            <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</>
-          ) : (
-            <><RefreshCw className="h-4 w-4" /> Run Technical Audit</>
-          )}
-        </button>
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/dashboard/websites/${website.id}/keywords`}
+            className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 hover:bg-gray-50 dark:hover:bg-white/20 text-gray-700 dark:text-white text-sm font-medium rounded-lg transition-all"
+          >
+            Keyword Gap Analysis
+          </Link>
+          <button
+            onClick={handleScan}
+            disabled={isScanning || latestScan?.status === "RUNNING"}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
+          >
+            {isScanning || latestScan?.status === "RUNNING" ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Crawling Site...</>
+            ) : (
+              <><RefreshCw className="h-4 w-4" /> Run Deep Audit</>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Main Stats */}
@@ -201,10 +219,10 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
 
       {/* Detailed Rich Report */}
       <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
-        <div className="px-2 sm:px-6 py-4 border-b border-gray-200 dark:border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="px-2 sm:px-6 py-4 border-b border-gray-200 dark:border-white/10 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white px-4 sm:px-0">Full Technical Report</h2>
           
-          <div className="flex bg-gray-100 dark:bg-white/5 p-1 rounded-lg mx-4 sm:mx-0">
+          <div className="flex flex-wrap bg-gray-100 dark:bg-white/5 p-1 rounded-lg mx-4 sm:mx-0">
             <button 
               onClick={() => setActiveTab('ALL')}
               className={cn("px-4 py-1.5 text-xs font-medium rounded-md transition-colors", activeTab === 'ALL' ? "bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}
@@ -223,10 +241,48 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
             >
               Passed ({passedAudits.length})
             </button>
+            <button 
+              onClick={() => setActiveTab('HISTORY')}
+              className={cn("px-4 py-1.5 text-xs font-medium rounded-md transition-colors", activeTab === 'HISTORY' ? "bg-white dark:bg-white/10 text-indigo-600 dark:text-indigo-400 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}
+            >
+              Change History ({website?.seoChanges?.length || 0})
+            </button>
           </div>
         </div>
         
-        {!latestScan?.seoIssues || latestScan.seoIssues.length === 0 ? (
+        {activeTab === 'HISTORY' ? (
+          <div className="divide-y divide-gray-100 dark:divide-white/5">
+            {!website?.seoChanges || website.seoChanges.length === 0 ? (
+              <div className="p-16 text-center">
+                <Info className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-700 mb-4" />
+                <p className="text-gray-500 dark:text-gray-400 font-medium">No changes detected yet. Run multiple scans to see history.</p>
+              </div>
+            ) : (
+              website.seoChanges.map((change) => (
+                <div key={change.id} className="p-5 sm:px-6 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors flex items-start gap-4">
+                  <div className="mt-1">
+                    {change.impact === 'high' ? (
+                      <AlertTriangle className="h-5 w-5 text-red-500" />
+                    ) : (
+                      <Info className="h-5 w-5 text-blue-500" />
+                    )}
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
+                      {change.field.toUpperCase()} changed
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                      From <span className="font-mono text-xs bg-gray-100 dark:bg-white/10 px-1 rounded">{change.before}</span> to <span className="font-mono text-xs bg-gray-100 dark:bg-white/10 px-1 rounded">{change.after}</span>
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Detected on {new Date(change.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : !latestScan?.seoIssues || latestScan.seoIssues.length === 0 ? (
           <div className="p-16 text-center">
             <CheckCircle2 className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-700 mb-4" />
             <p className="text-gray-500 dark:text-gray-400 font-medium">Run a technical audit to generate the report.</p>

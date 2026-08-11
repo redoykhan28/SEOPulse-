@@ -31,6 +31,10 @@ export async function GET(
           include: {
             seoIssues: true
           }
+        },
+        seoChanges: {
+          orderBy: { createdAt: 'desc' },
+          take: 10
         }
       },
     });

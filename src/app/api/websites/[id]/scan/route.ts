@@ -36,6 +36,12 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized to scan this website" }, { status: 403 });
     }
 
+    // Fetch previous scan for Change Detection
+    const previousScan = await prisma.scan.findFirst({
+      where: { websiteId, status: "COMPLETED" },
+      orderBy: { createdAt: 'desc' }
+    });
+
     // Create a new scan record
     const scan = await prisma.scan.create({
       data: {
@@ -46,37 +52,49 @@ export async function POST(
     });
 
     try {
-      // 1. Run the crawler
-      const result = await crawlAndScore(website.url, websiteId);
+      // 1. Run the crawler (crawls up to 20 pages)
+      const result = await crawlAndScore(website.url, websiteId, 20);
 
-      // 2. Save the homepage as a Page record (if not exists)
-      const page = await prisma.page.upsert({
-        where: {
-          websiteId_url: {
-            websiteId,
-            url: website.url,
+      // 2. Process each crawled page
+      for (const crawledPage of result.pages) {
+        // Save the page content to the DB for Keyword Gap Analysis
+        const page = await prisma.page.upsert({
+          where: {
+            websiteId_url: {
+              websiteId,
+              url: crawledPage.url,
+            },
           },
-        },
-        update: {},
-        create: {
-          websiteId,
-          url: website.url,
-        },
-      });
+          update: {
+            title: crawledPage.title,
+            metaDesc: crawledPage.metaDesc,
+            h1: crawledPage.h1,
+            textContent: crawledPage.textContent
+          },
+          create: {
+            websiteId,
+            url: crawledPage.url,
+            title: crawledPage.title,
+            metaDesc: crawledPage.metaDesc,
+            h1: crawledPage.h1,
+            textContent: crawledPage.textContent
+          },
+        });
 
-      // 3. Save the SeoIssues
-      const seoIssuesData = result.issues.map(issue => ({
-        scanId: scan.id,
-        pageId: page.id,
-        checkType: issue.ruleId,
-        passed: issue.passed,
-        severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING', // Map to Prisma Severity enum
-        details: issue.details,
-      }));
+        // 3. Save the SeoIssues for this page
+        const seoIssuesData = crawledPage.issues.map(issue => ({
+          scanId: scan.id,
+          pageId: page.id,
+          checkType: issue.ruleId,
+          passed: issue.passed,
+          severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
+          details: issue.details,
+        }));
 
-      await prisma.seoIssue.createMany({
-        data: seoIssuesData as any,
-      });
+        await prisma.seoIssue.createMany({
+          data: seoIssuesData as any,
+        });
+      }
 
       // 4. Update the Scan with completion status and score
       const updatedScan = await prisma.scan.update({
@@ -87,6 +105,23 @@ export async function POST(
           overallScore: result.overallScore,
         },
       });
+
+      // 5. Change Detection (Compare to previous scan)
+      if (previousScan && previousScan.overallScore !== null) {
+        if (previousScan.overallScore !== result.overallScore) {
+          const impact = Math.abs(previousScan.overallScore - result.overallScore) > 10 ? "high" : "low";
+          
+          await prisma.seoChange.create({
+            data: {
+              websiteId,
+              field: "score",
+              before: previousScan.overallScore.toString(),
+              after: result.overallScore.toString(),
+              impact: impact
+            }
+          });
+        }
+      }
 
       return NextResponse.json({ scan: updatedScan });
       
