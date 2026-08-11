@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   Globe,
   AlertTriangle,
@@ -268,11 +269,12 @@ export default function DashboardPage() {
                             >
                               <ExternalLink className="h-4 w-4" />
                             </a>
-                            <button
+                            <Link
+                              href={`/dashboard/websites/${site.id}`}
                               className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors"
                             >
                               View Details
-                            </button>
+                            </Link>
                           </div>
                         </td>
                       </tr>
