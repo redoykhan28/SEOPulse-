@@ -1,0 +1,221 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -------------------------
+// User & Auth & RBAC
+// -------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships             OrganizationMember[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members       OrganizationMember[]
+  websites      Website[]
+  notifications Notification[]
+  keywordFiles  KeywordFile[]
+}
+
+enum Role {
+  OWNER
+  SEO_MANAGER
+  SEO_EXECUTIVE
+  CLIENT
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role         @default(CLIENT)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+}
+
+// -------------------------
+// Core SEO App Models
+// -------------------------
+
+enum ScanFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model Website {
+  id             String        @id @default(cuid())
+  organizationId String
+  url            String
+  scanFrequency  ScanFrequency @default(WEEKLY)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pages        Page[]
+  scans        Scan[]
+  seoChanges   SeoChange[]
+  reports      Report[]
+  keywordFiles KeywordFile[]
+}
+
+model Page {
+  id        String   @id @default(cuid())
+  websiteId String
+  url       String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  website   Website    @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  seoIssues SeoIssue[]
+
+  @@unique([websiteId, url])
+}
+
+enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Scan {
+  id           String     @id @default(cuid())
+  websiteId    String
+  status       ScanStatus @default(PENDING)
+  overallScore Int?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  website   Website    @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  seoIssues SeoIssue[]
+}
+
+enum Severity {
+  WARNING
+  FAILED
+}
+
+model SeoIssue {
+  id        String   @id @default(cuid())
+  scanId    String
+  pageId    String
+  checkType String   // e.g. "missing_h1", "broken_link"
+  passed    Boolean
+  severity  Severity @default(WARNING)
+  details   String?  // JSON string or plain text details
+  createdAt DateTime @default(now())
+
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
+
+model SeoChange {
+  id        String   @id @default(cuid())
+  websiteId String
+  field     String   // e.g. "title", "score", "broken_links"
+  before    String?
+  after     String?
+  impact    String?  // e.g. "high", "low"
+  createdAt DateTime @default(now())
+
+  website Website @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  websiteId  String
+  publicSlug String   @unique // yourapp.com/report/[site-slug]/[month]
+  month      String   // e.g. "August 2026"
+  metadata   String?  // JSON string
+  createdAt  DateTime @default(now())
+
+  website Website @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+}
+
+// -------------------------
+// Notifications
+// -------------------------
+
+model Notification {
+  id             String   @id @default(cuid())
+  userId         String?
+  organizationId String?
+  type           String
+  message        String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  id        String  @id @default(cuid())
+  userId    String
+  alertType String
+  enabled   Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, alertType])
+}
+
+// -------------------------
+// Keyword Research
+// -------------------------
+
+model KeywordFile {
+  id             String   @id @default(cuid())
+  organizationId String
+  websiteId      String
+  filename       String
+  uploadedAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  website      Website      @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  matches KeywordMatch[]
+}
+
+model KeywordMatch {
+  id             String  @id @default(cuid())
+  keywordFileId  String
+  keyword        String
+  volume         Int?
+  difficulty     Int?
+  matchStatus    String  // "targeted" | "partially targeted" | "not targeted"
+  suggestedPage  String?
+
+  keywordFile KeywordFile @relation(fields: [keywordFileId], references: [id], onDelete: Cascade)
+}
