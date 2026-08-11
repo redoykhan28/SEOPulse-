@@ -27,7 +27,7 @@ export async function GET(
         organization: { include: { members: true } },
         scans: {
           orderBy: { createdAt: 'desc' },
-          take: 5,
+          take: 15,
           include: {
             seoIssues: true
           }

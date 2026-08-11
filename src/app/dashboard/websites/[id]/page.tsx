@@ -8,6 +8,7 @@ import {
   ShieldAlert, ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 type SeoIssue = {
   id: string;
@@ -216,6 +217,51 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
            </div>
         </div>
       </div>
+
+      {/* Score History Chart */}
+      {website.scans && website.scans.length > 1 && (
+        <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-6">
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-6">Score History</h3>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={[...website.scans].reverse()} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#374151" opacity={0.2} />
+                <XAxis 
+                  dataKey="completedAt" 
+                  tickFormatter={(val) => val ? new Date(val).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}
+                  stroke="#6b7280" 
+                  fontSize={12} 
+                  tickLine={false}
+                  axisLine={false}
+                  dy={10}
+                />
+                <YAxis 
+                  domain={[0, 100]} 
+                  stroke="#6b7280" 
+                  fontSize={12} 
+                  tickLine={false}
+                  axisLine={false}
+                  dx={-10}
+                />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', color: '#fff' }}
+                  itemStyle={{ color: '#fff' }}
+                  labelFormatter={(val) => val ? new Date(val).toLocaleString() : ''}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="overallScore" 
+                  stroke="#4f46e5" 
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 2, fill: '#fff', stroke: '#4f46e5' }}
+                  activeDot={{ r: 6, fill: '#4f46e5', stroke: '#fff', strokeWidth: 2 }}
+                  name="SEO Score"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Detailed Rich Report */}
       <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
