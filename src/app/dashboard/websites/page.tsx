@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
+import DashboardPage from "../page";
 
 export default function WebsitesPage() {
-  // The main dashboard already serves as the websites list
-  // Redirect to avoid a 404 when clicking the Sidebar link
-  redirect("/dashboard");
+  // Render the dashboard view for the websites tab instead of redirecting
+  return <DashboardPage />;
 }

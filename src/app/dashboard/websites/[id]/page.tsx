@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { 
   ArrowLeft, Globe, RefreshCw, AlertTriangle, 
   CheckCircle2, Info, Loader2, ExternalLink, Calendar,
   ShieldAlert, ShieldCheck, ChevronDown, ChevronRight,
-  FileSearch, X, Search
+  FileSearch, X, Search, Trash2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -292,14 +293,31 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
 export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = use(params);
   const websiteId = unwrappedParams.id;
+  const router = useRouter();
   
   const [website, setWebsite] = useState<WebsiteDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ crawled: number; remaining: number } | null>(null);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
   const [showPagesModal, setShowPagesModal] = useState(false);
+
+  const handleDelete = async () => {
+    if (!website) return;
+    if (!confirm(`Are you sure you want to delete ${website.url}? This action cannot be undone.`)) return;
+    
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/websites/${website.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error("Failed to delete website");
+      router.push('/dashboard');
+    } catch (err) {
+      alert("Error deleting website.");
+      setIsDeleting(false);
+    }
+  };
 
   const fetchWebsiteDetails = useCallback(async () => {
     try {
@@ -467,6 +485,14 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
             className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] cursor-pointer"
           >
             {isScanning ? <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</> : <><RefreshCw className="h-4 w-4" /> Run Deep Audit</>}
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-white dark:bg-white/5 border border-red-200 dark:border-red-500/20 hover:bg-red-50 dark:hover:bg-red-500/10 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg transition-all cursor-pointer"
+            title="Delete Website"
+          >
+            {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
           </button>
         </div>
       </div>

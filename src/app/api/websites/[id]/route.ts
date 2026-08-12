@@ -64,3 +64,47 @@ export async function GET(
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: websiteId } = await params;
+    
+    // Auth check
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const dbUser = await prisma.user.findUnique({ where: { email: user.email! } });
+    if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+    const website = await prisma.website.findUnique({
+      where: { id: websiteId },
+      include: { organization: { include: { members: true } } },
+    });
+
+    if (!website) {
+      return NextResponse.json({ error: "Website not found" }, { status: 404 });
+    }
+
+    const isMember = website.organization.members.some(m => m.userId === dbUser.id);
+    if (!isMember) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+
+    await prisma.website.delete({
+      where: { id: websiteId }
+    });
+
+    return NextResponse.json({ success: true }, { status: 200 });
+
+  } catch (err) {
+    console.error("[DELETE /api/websites/[id]]", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}

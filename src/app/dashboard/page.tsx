@@ -12,6 +12,7 @@ import {
   RefreshCw,
   ExternalLink,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import { AddWebsiteModal } from "@/components/AddWebsiteModal";
 import { cn } from "@/lib/utils";
@@ -73,6 +74,19 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchWebsites();
   }, [fetchWebsites]);
+
+  const handleDeleteWebsite = async (id: string, url: string) => {
+    if (!confirm(`Are you sure you want to delete ${url}? This action cannot be undone and will delete all scan history.`)) return;
+    
+    try {
+      const res = await fetch(`/api/websites/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error("Failed to delete website");
+      setWebsites(prev => prev.filter(w => w.id !== id));
+    } catch (err) {
+      alert("Error deleting website.");
+      console.error(err);
+    }
+  };
 
   const totalWebsites = websites.length;
   const scannedSites = websites.filter((w) => w.scans[0]?.overallScore !== null);
@@ -275,6 +289,13 @@ export default function DashboardPage() {
                             >
                               View Details
                             </Link>
+                            <button
+                              onClick={() => handleDeleteWebsite(site.id, site.url)}
+                              className="p-1.5 rounded-lg text-red-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                              title="Delete website"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
                           </div>
                         </td>
                       </tr>
