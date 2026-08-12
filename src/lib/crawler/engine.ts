@@ -35,12 +35,33 @@ const PAGINATION_PARAMS = new Set([
   'pagenum', // Some themes
 ]);
 
+// Media and file extensions that should NEVER be crawled as web pages
+const IGNORED_EXTENSIONS = new Set([
+  // Images
+  '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.ico', '.bmp', '.tiff',
+  // Videos / Audio
+  '.mp4', '.webm', '.ogg', '.mov', '.avi', '.wmv', '.flv', '.mp3', '.wav', '.flac', '.aac',
+  // Documents / Files
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv',
+  '.zip', '.rar', '.7z', '.tar', '.gz',
+  // Assets
+  '.css', '.js', '.json', '.xml', '.woff', '.woff2', '.ttf', '.eot'
+]);
+
 function normalizeUrl(baseUrl: string, href: string): string | null {
   try {
     const url = new URL(href, baseUrl);
 
     // Only crawl http/https
     if (!url.protocol.startsWith('http')) return null;
+
+    // Reject non-HTML file extensions
+    const pathname = url.pathname.toLowerCase();
+    const lastDot = pathname.lastIndexOf('.');
+    if (lastDot !== -1) {
+      const ext = pathname.substring(lastDot);
+      if (IGNORED_EXTENSIONS.has(ext)) return null;
+    }
 
     // Remove fragment (#hash)
     url.hash = '';

@@ -298,7 +298,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ crawled: number; remaining: number } | null>(null);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<'FAILED' | 'PASSED' | 'ALL' | 'HISTORY'>('FAILED');
+  const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
   const [showPagesModal, setShowPagesModal] = useState(false);
 
   const fetchWebsiteDetails = useCallback(async () => {
@@ -578,7 +578,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
         <div className="px-6 py-4 border-b border-gray-200 dark:border-white/10 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">Full Technical Report</h2>
           <div className="flex flex-wrap bg-gray-100 dark:bg-white/5 p-1 rounded-lg">
-            {(['FAILED', 'PASSED', 'ALL', 'HISTORY'] as const).map(tab => (
+            {(['ALL', 'FAILED', 'PASSED', 'HISTORY'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -592,9 +592,9 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
                     : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
                 )}
               >
+                {tab === 'ALL' && `All (${sortedGroups.length})`}
                 {tab === 'FAILED' && `Issues (${failedGroups.length})`}
                 {tab === 'PASSED' && `Passed (${passedGroups.length})`}
-                {tab === 'ALL' && `All (${sortedGroups.length})`}
                 {tab === 'HISTORY' && `Changes (${website.seoChanges?.length || 0})`}
               </button>
             ))}
@@ -637,7 +637,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
                 key={checkType}
                 checkType={checkType}
                 issues={issues}
-                defaultOpen={i === 0 && activeTab === 'FAILED'}
+                defaultOpen={false}
               />
             ))
           )}
