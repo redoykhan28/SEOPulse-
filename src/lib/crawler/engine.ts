@@ -26,13 +26,15 @@ export interface CrawledPage {
 // Query parameters that represent actual different pages (pagination)
 // and must be preserved to avoid skipping paginated content
 const PAGINATION_PARAMS = new Set([
-  'paged',   // WordPress standard pagination
-  'page',    // WooCommerce / generic pagination
-  'p',       // WordPress post ID
-  'pg',      // Generic pagination
-  'start',   // Some CMSs (Joomla, etc.)
-  'offset',  // API-style pagination
-  'pagenum', // Some themes
+  'paged',               // WordPress standard pagination
+  'page',                // WooCommerce / generic pagination
+  'p',                   // WordPress post ID
+  'pg',                  // Generic pagination
+  'start',               // Some CMSs (Joomla, etc.)
+  'offset',              // API-style pagination
+  'pagenum',             // Some themes
+  'tribe_paged',         // The Events Calendar pagination
+  'tribe_event_display', // The Events Calendar views (list, month, day)
 ]);
 
 // Media and file extensions that should NEVER be crawled as web pages
