@@ -61,6 +61,7 @@ export async function POST(
           // Fire notifications
           if (scoreDiff < 0) {
             const hostname = new URL(scan.website.url).hostname;
+            const additionalEmails = (scan.website as any).notifyEmails as string[] || [];
             for (const member of scan.website.organization.members) {
               if (await isAlertEnabled(member.userId, "score_drop")) {
                 await createNotification({
@@ -69,6 +70,7 @@ export async function POST(
                   type: "score_drop",
                   message: `⬇ SEO score for ${hostname} dropped from ${previousScan.overallScore} to ${overallScore}.`,
                   userEmail: member.user.email,
+                  additionalEmails,
                   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
                   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL,
                 });

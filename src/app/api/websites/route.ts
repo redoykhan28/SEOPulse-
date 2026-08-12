@@ -85,6 +85,15 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Notify about website addition
+    import("@/lib/notifications").then(({ createNotification }) => {
+      createNotification({
+        organizationId: website.organizationId,
+        type: "minor_seo_change",
+        message: `Website added: ${website.url}`,
+      });
+    }).catch(console.error);
+
     return NextResponse.json({ website }, { status: 201 });
   } catch (err) {
     console.error("[POST /api/websites]", err);

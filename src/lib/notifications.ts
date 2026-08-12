@@ -18,6 +18,7 @@ interface NotifyOptions {
   type: NotificationType;
   message: string;
   userEmail?: string;
+  additionalEmails?: string[];
   slackWebhookUrl?: string;
   discordWebhookUrl?: string;
 }
@@ -35,11 +36,17 @@ export async function createNotification(opts: NotifyOptions) {
   });
 
   // 2. Email via Resend (if configured)
-  if (resend && opts.userEmail) {
+  const emailsToSend = new Set<string>();
+  if (opts.userEmail) emailsToSend.add(opts.userEmail);
+  if (opts.additionalEmails) {
+    opts.additionalEmails.forEach(e => emailsToSend.add(e));
+  }
+
+  if (resend && emailsToSend.size > 0) {
     try {
       await resend.emails.send({
         from: 'SEOPulse <alerts@noreply.seopulse.app>',
-        to: [opts.userEmail],
+        to: Array.from(emailsToSend),
         subject: `🚨 SEOPulse Alert: ${opts.type.replace(/_/g, ' ').toUpperCase()}`,
         html: `
           <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">

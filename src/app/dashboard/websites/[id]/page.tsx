@@ -8,13 +8,14 @@ import {
   ArrowLeft, Globe, RefreshCw, AlertTriangle, 
   CheckCircle2, Info, Loader2, ExternalLink, Calendar,
   ShieldAlert, ShieldCheck, ChevronDown, ChevronRight,
-  FileSearch, X, Search, Trash2
+  FileSearch, X, Search, Trash2, Settings
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { WebsiteDetailsSkeleton } from "@/components/ui/Skeleton";
+import { EditWebsiteModal } from "@/components/EditWebsiteModal";
 
 const DynamicPDFDownloadButton = dynamic(
   () => import("@/components/pdf/PDFDownloadButton"),
@@ -49,6 +50,10 @@ type SeoChange = {
   after: string | null;
   impact: string | null;
   createdAt: string;
+  updatedAt: string;
+  scanFrequency: string;
+  notifyEmails: string[];
+  pages?: { url: string; title: string | null }[];
 };
 
 type CrawledPage = {
@@ -309,6 +314,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [isScanning, setIsScanning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ crawled: number; remaining: number } | null>(null);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
@@ -479,6 +485,20 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
         onCancel={() => setDeleteTarget(null)}
       />
 
+      {website && (
+        <EditWebsiteModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          onSuccess={() => fetchWebsiteDetails(false)}
+          website={{
+            id: website.id,
+            url: website.url,
+            scanFrequency: website.scanFrequency,
+            notifyEmails: website.notifyEmails,
+          }}
+        />
+      )}
+
       {/* Crawled Pages Modal */}
       {showPagesModal && (
         <CrawledPagesModal pages={website.pages || []} onClose={() => setShowPagesModal(false)} />
@@ -496,8 +516,18 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
               <a href={website.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-indigo-500 transition-colors cursor-pointer">
                 <ExternalLink className="h-4 w-4" />
               </a>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-white/10 transition-colors"
+                title="Website Settings"
+              >
+                <Settings className="h-5 w-5" />
+              </button>
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{website.url}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-2">
+              <Globe className="h-3 w-3" />
+              {website.pages?.length || 0} pages • Scanned {website.scanFrequency.toLowerCase()}
+            </p>
           </div>
         </div>
 

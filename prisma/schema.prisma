@@ -85,6 +85,7 @@ model Website {
   seoChanges   SeoChange[]
   reports      Report[]
   keywordFiles KeywordFile[]
+  notifyEmails String[]     @default([])
 }
 
 model Page {
