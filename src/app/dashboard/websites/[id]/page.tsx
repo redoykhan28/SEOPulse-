@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, use, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { 
   ArrowLeft, Globe, RefreshCw, AlertTriangle, 
   CheckCircle2, Info, Loader2, ExternalLink, Calendar,
@@ -14,6 +15,11 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { WebsiteDetailsSkeleton } from "@/components/ui/Skeleton";
+
+const DynamicPDFDownloadButton = dynamic(
+  () => import("@/components/pdf/PDFDownloadButton"),
+  { ssr: false }
+);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type PageRef = { url: string; title: string | null };
@@ -512,6 +518,16 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
           >
             Keyword Gap
           </Link>
+          
+          {latestScan && (
+            <DynamicPDFDownloadButton 
+              websiteUrl={website.url} 
+              score={latestScan.overallScore || 0}
+              date={new Date(latestScan.completedAt || latestScan.startedAt).toLocaleDateString()}
+              issues={latestScan.seoIssues}
+            />
+          )}
+
           <button
             onClick={handleScan}
             disabled={isScanning || latestScan?.status === "RUNNING"}
