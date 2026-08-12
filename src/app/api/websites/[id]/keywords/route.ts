@@ -158,14 +158,24 @@ export async function POST(
     // ── AI Enhancement via OpenRouter (optional) ─────────────────────────────
     if (useAI && process.env.OPENROUTER_API_KEY) {
       try {
-        const pageContext = pages.slice(0, 10).map(p =>
-          `URL: ${p.url}\nTitle: ${p.title || ''}\nH1: ${p.h1 || ''}\nDescription: ${p.metaDesc || ''}`
-        ).join("\n---\n");
-
         const notTargeted = matches.filter(m => m.matchStatus !== "targeted");
         const keywordList = notTargeted.map(m => m.keyword).join(", ");
+        
+        // Take up to 30 pages and chunk them into groups of 15
+        const pagesToAnalyze = pages.slice(0, 30);
+        const CHUNK_SIZE = 15;
+        const pageChunks: typeof pages[] = [];
+        
+        for (let i = 0; i < pagesToAnalyze.length; i += CHUNK_SIZE) {
+          pageChunks.push(pagesToAnalyze.slice(i, i + CHUNK_SIZE));
+        }
 
-        const prompt = `You are an SEO expert. Below are pages crawled from a website and a list of keywords that were NOT matched by simple string matching.
+        const fetchPromises = pageChunks.map(chunk => {
+          const pageContext = chunk.map(p =>
+            `URL: ${p.url}\nTitle: ${p.title || ''}\nH1: ${p.h1 || ''}\nDescription: ${p.metaDesc || ''}`
+          ).join("\n---\n");
+
+          const prompt = `You are an SEO expert. Below are pages crawled from a website and a list of keywords that were NOT matched by simple string matching.
 
 CRAWLED PAGES:
 ${pageContext}
@@ -178,36 +188,40 @@ For each keyword, determine:
 
 Return ONLY a valid JSON array of objects with keys: keyword, status, page. No explanation.`;
 
-        const aiRes = await fetch(OPENROUTER_API_URL, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
-            "X-Title": "SEOPulse Keyword Analysis",
-          },
-          body: JSON.stringify({
-            model: OPENROUTER_MODEL,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1,
-          }),
+          return fetch(OPENROUTER_API_URL, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+              "Content-Type": "application/json",
+              "X-Title": "SEOPulse Keyword Analysis",
+            },
+            body: JSON.stringify({
+              model: OPENROUTER_MODEL,
+              messages: [{ role: "user", content: prompt }],
+              temperature: 0.1,
+            }),
+          }).then(r => r.json());
         });
 
-        if (aiRes.ok) {
-          const aiData = await aiRes.json();
+        // Run all chunks in parallel
+        const results = await Promise.all(fetchPromises);
+
+        for (const aiData of results) {
           const rawContent = aiData.choices?.[0]?.message?.content || "[]";
-          // Extract JSON from response
           const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
           if (jsonMatch) {
-            const aiMatches: { keyword: string; status: string; page: string | null }[] =
-              JSON.parse(jsonMatch[0]);
-            
-            // Merge AI results back
-            for (const aiMatch of aiMatches) {
-              const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
-              if (existing && existing.matchStatus === "not targeted" && aiMatch.status === "targeted") {
-                existing.matchStatus = "targeted (AI)";
-                existing.suggestedPage = aiMatch.page;
+            try {
+              const aiMatches: { keyword: string; status: string; page: string | null }[] = JSON.parse(jsonMatch[0]);
+              // Merge AI results back
+              for (const aiMatch of aiMatches) {
+                const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
+                if (existing && existing.matchStatus === "not targeted" && aiMatch.status === "targeted") {
+                  existing.matchStatus = "targeted (AI)";
+                  existing.suggestedPage = aiMatch.page;
+                }
               }
+            } catch (e) {
+              // Ignore parse errors for individual chunks
             }
           }
         }
