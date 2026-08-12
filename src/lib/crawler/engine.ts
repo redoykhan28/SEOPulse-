@@ -19,8 +19,22 @@ export interface CrawledPage {
 
 // ---------------------------------------------------------------------------
 // FIX 1: Smart URL normalization — strips query strings to prevent spider traps
-// EXCEPTION: keeps query strings on PHP sites that use them for routing
+// EXCEPTION 1: Keeps query strings on PHP sites that use them for routing
+// EXCEPTION 2: Keeps known pagination params (paged, page, p, pg, start, offset)
 // ---------------------------------------------------------------------------
+
+// Query parameters that represent actual different pages (pagination)
+// and must be preserved to avoid skipping paginated content
+const PAGINATION_PARAMS = new Set([
+  'paged',   // WordPress standard pagination
+  'page',    // WooCommerce / generic pagination
+  'p',       // WordPress post ID
+  'pg',      // Generic pagination
+  'start',   // Some CMSs (Joomla, etc.)
+  'offset',  // API-style pagination
+  'pagenum', // Some themes
+]);
+
 function normalizeUrl(baseUrl: string, href: string): string | null {
   try {
     const url = new URL(href, baseUrl);
@@ -34,11 +48,25 @@ function normalizeUrl(baseUrl: string, href: string): string | null {
     // SMART QUERY STRING HANDLING:
     // If the path itself ends with a known scripting extension, the query
     // string is part of the page identity (e.g. index.php?page=about).
-    // For all modern URLs (/blog, /shop, /about), strip query strings entirely
-    // since they are just tracking/sorting params and cause spider traps.
+    // For all modern URLs (/blog, /shop, /about), strip query strings,
+    // BUT preserve known pagination parameters so we don't skip paginated pages.
     const isLegacyScriptPage = /\.(php|asp|aspx|cfm|cgi|pl|jsp)(\?|$)/i.test(url.pathname);
+
     if (!isLegacyScriptPage) {
-      url.search = ''; // Strip ?query=params
+      const paginationEntries: [string, string][] = [];
+
+      // Walk all query params and keep only pagination ones
+      url.searchParams.forEach((value, key) => {
+        if (PAGINATION_PARAMS.has(key.toLowerCase())) {
+          paginationEntries.push([key, value]);
+        }
+      });
+
+      // Clear all params, then re-add only the pagination ones
+      url.search = '';
+      for (const [key, value] of paginationEntries) {
+        url.searchParams.set(key, value);
+      }
     }
 
     // Remove trailing slash for consistent deduplication
