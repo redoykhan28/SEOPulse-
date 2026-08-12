@@ -292,7 +292,7 @@ export function TechnicalReportPDF({ websiteUrl, score, date, issues }: Technica
                   ))}
                   {failedItems.length > 3 ? (
                     <Text style={styles.pageRef}>• ...and {failedItems.length - 3} more</Text>
-                  ) : <Text style={{ display: 'none' }}></Text>}
+                  ) : null}
 
                   <View style={styles.suggestionBox}>
                     <Text style={styles.suggestionTitle}>How to fix it</Text>
