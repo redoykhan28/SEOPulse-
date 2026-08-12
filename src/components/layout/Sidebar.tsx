@@ -10,6 +10,7 @@ import {
   FileText,
   ChevronDown,
   Building2,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,11 +20,38 @@ const navItems = [
   { href: "/dashboard/reports", label: "Reports", icon: FileText },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="w-64 bg-white dark:bg-[#0a0a0a] border-r border-gray-200 dark:border-white/10 hidden md:flex flex-col transition-colors duration-200">
+    <>
+      {/* Mobile Overlay */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 md:hidden transition-opacity duration-300" 
+          onClick={onClose}
+        />
+      )}
+
+      {/* Sidebar Container */}
+      <aside 
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-[#0a0a0a] border-r border-gray-200 dark:border-white/10 flex flex-col transition-transform duration-300 ease-in-out md:relative md:translate-x-0",
+          isOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        {/* Mobile Close Button */}
+        <button 
+          onClick={onClose}
+          className="md:hidden absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+        >
+          <X className="h-5 w-5" />
+        </button>
       {/* Logo */}
       <div className="h-16 flex items-center px-6 border-b border-gray-200 dark:border-white/10">
         <Activity className="h-6 w-6 text-indigo-500 mr-2 flex-shrink-0" />
