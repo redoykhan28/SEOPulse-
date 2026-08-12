@@ -217,11 +217,11 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
           <div className="flex items-baseline gap-2">
             <span className={cn(
               "text-6xl font-black tracking-tight",
-              latestScan?.overallScore === null ? "text-gray-300 dark:text-gray-700" :
-              latestScan!.overallScore >= 80 ? "text-emerald-500" :
-              latestScan!.overallScore >= 50 ? "text-yellow-500" : "text-red-500"
+              (!latestScan || latestScan.overallScore === null) ? "text-gray-300 dark:text-gray-700" :
+              latestScan.overallScore >= 80 ? "text-emerald-500" :
+              latestScan.overallScore >= 50 ? "text-yellow-500" : "text-red-500"
             )}>
-              {latestScan?.overallScore !== null ? latestScan.overallScore : "--"}
+              {(latestScan && latestScan.overallScore !== null) ? latestScan.overallScore : "--"}
             </span>
             <span className="text-xl text-gray-400 font-medium">/ 100</span>
           </div>

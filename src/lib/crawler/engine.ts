@@ -17,23 +17,162 @@ export interface CrawledPage {
   }[];
 }
 
+// ---------------------------------------------------------------------------
+// FIX 1: Smart URL normalization — strips query strings to prevent spider traps
+// EXCEPTION: keeps query strings on PHP sites that use them for routing
+// ---------------------------------------------------------------------------
 function normalizeUrl(baseUrl: string, href: string): string | null {
   try {
     const url = new URL(href, baseUrl);
+
+    // Only crawl http/https
     if (!url.protocol.startsWith('http')) return null;
-    url.hash = ''; // Remove hash
-    return url.href.replace(/\/$/, ''); // Remove trailing slash
+
+    // Remove fragment (#hash)
+    url.hash = '';
+
+    // SMART QUERY STRING HANDLING:
+    // If the path itself ends with a known scripting extension, the query
+    // string is part of the page identity (e.g. index.php?page=about).
+    // For all modern URLs (/blog, /shop, /about), strip query strings entirely
+    // since they are just tracking/sorting params and cause spider traps.
+    const isLegacyScriptPage = /\.(php|asp|aspx|cfm|cgi|pl|jsp)(\?|$)/i.test(url.pathname);
+    if (!isLegacyScriptPage) {
+      url.search = ''; // Strip ?query=params
+    }
+
+    // Remove trailing slash for consistent deduplication
+    const normalized = url.href.replace(/\/$/, '');
+    return normalized || null;
   } catch {
     return null;
   }
 }
 
-/**
- * Stateful crawler that processes a chunk of URLs from the Scan queue.
- * @param scanId The ID of the Scan in the DB
- * @param maxChunkSize Maximum number of pages to crawl in this invocation
- */
-export async function processCrawlChunk(scanId: string, maxChunkSize: number = 20): Promise<{
+// ---------------------------------------------------------------------------
+// FIX 2: Parallel page fetcher with a concurrency limit (default: 5)
+// Processes `batch` of URLs simultaneously — safe for shared-hosting targets
+// ---------------------------------------------------------------------------
+async function crawlBatch(
+  urls: string[],
+  scanId: string,
+  websiteId: string,
+  websiteUrl: string,
+  startHostname: string,
+  visited: Set<string>,
+): Promise<string[]> {
+  // Returns a list of newly discovered internal URLs from this batch
+  const newlyDiscovered: string[] = [];
+
+  await Promise.all(
+    urls.map(async (currentUrl) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000); // 15s per page timeout
+
+        let response: Response;
+        try {
+          response = await fetch(currentUrl, {
+            headers: {
+              'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)',
+              'Accept': 'text/html,application/xhtml+xml',
+            },
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        if (!response.ok) {
+          console.warn(`[Crawler] ${response.status} on ${currentUrl}`);
+          return;
+        }
+
+        // Only process HTML pages (skip PDFs, images, etc.)
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('text/html')) return;
+
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        // --- Content Extraction ---
+        const title = $('title').text().trim() || null;
+        const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
+        const h1 = $('h1').first().text().trim() || null;
+
+        $('script, style, noscript, svg').remove();
+        const textContent = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
+
+        // --- SEO Rules Evaluation ---
+        const issues: CrawledPage['issues'] = [];
+        for (const rule of seoRules) {
+          const result = rule.evaluate($);
+          issues.push({
+            ruleId: rule.id,
+            passed: result.passed,
+            severity: result.severity,
+            details: result.details,
+          });
+        }
+
+        // --- Persist to DB ---
+        const page = await prisma.page.upsert({
+          where: { websiteId_url: { websiteId, url: currentUrl } },
+          update: { title, metaDesc, h1, textContent },
+          create: { websiteId, url: currentUrl, title, metaDesc, h1, textContent },
+        });
+
+        await prisma.seoIssue.createMany({
+          data: issues.map(issue => ({
+            scanId,
+            pageId: page.id,
+            checkType: issue.ruleId,
+            passed: issue.passed,
+            severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
+            details: issue.details,
+          })) as any,
+        });
+
+        // --- Discover new internal links ---
+        $('a[href]').each((_, el) => {
+          const href = $(el).attr('href');
+          if (!href) return;
+
+          const absoluteUrl = normalizeUrl(websiteUrl, href);
+          if (!absoluteUrl) return;
+
+          try {
+            const linkHostname = new URL(absoluteUrl).hostname;
+            // Only follow links within the exact same domain
+            if (linkHostname !== startHostname) return;
+            // Skip already-visited or already-queued
+            if (!visited.has(absoluteUrl)) {
+              newlyDiscovered.push(absoluteUrl);
+            }
+          } catch { /* ignore malformed URLs */ }
+        });
+
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          console.warn(`[Crawler] Timeout: ${currentUrl}`);
+        } else {
+          console.warn(`[Crawler] Error on ${currentUrl}: ${error.message}`);
+        }
+      }
+    })
+  );
+
+  return newlyDiscovered;
+}
+
+// ---------------------------------------------------------------------------
+// Main stateful chunk processor — used by both manual and cron API routes
+// ---------------------------------------------------------------------------
+export async function processCrawlChunk(
+  scanId: string,
+  maxChunkSize: number = 20,
+  concurrency: number = 5, // FIX 2: parallel workers per batch
+): Promise<{
   pagesCrawled: number;
   remainingQueue: number;
   isComplete: boolean;
@@ -43,122 +182,72 @@ export async function processCrawlChunk(scanId: string, maxChunkSize: number = 2
     include: { website: true },
   });
 
-  if (!scan) throw new Error("Scan not found");
+  if (!scan) throw new Error('Scan not found');
 
-  const startUrlObj = new URL(scan.website.url);
-  
-  // Parse queues from DB (defaulting if null)
-  let pendingUrls: string[] = scan.pendingUrls ? JSON.parse(scan.pendingUrls) : [normalizeUrl(scan.website.url, scan.website.url)!];
-  let scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
-  
+  const startHostname = new URL(scan.website.url).hostname;
+
+  // Restore queue state from DB
+  let pendingUrls: string[] = scan.pendingUrls
+    ? JSON.parse(scan.pendingUrls)
+    : [normalizeUrl(scan.website.url, scan.website.url)!];
+  const scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
+
   const visited = new Set<string>(scannedUrls);
   let pagesCrawledThisChunk = 0;
 
-  // Process up to maxChunkSize URLs
+  // Process URLs in parallel batches of `concurrency` until chunk is full
   while (pendingUrls.length > 0 && pagesCrawledThisChunk < maxChunkSize) {
-    const currentUrl = pendingUrls.shift()!;
-    
-    // Skip if already visited
-    if (visited.has(currentUrl)) continue;
-    
-    visited.add(currentUrl);
-    pagesCrawledThisChunk++;
+    // Dequeue the next batch (up to `concurrency` URLs)
+    const remaining = maxChunkSize - pagesCrawledThisChunk;
+    const batchSize = Math.min(concurrency, pendingUrls.length, remaining);
+    const batch: string[] = [];
 
-    try {
-      const response = await fetch(currentUrl, {
-        headers: { 'User-Agent': 'SEOPulseBot/3.0' },
-      });
-      
-      if (!response.ok) {
-        console.warn(`Failed to fetch ${currentUrl}: ${response.statusText}`);
-        continue;
+    // Pull batchSize URLs that haven't been visited yet
+    while (batch.length < batchSize && pendingUrls.length > 0) {
+      const url = pendingUrls.shift()!;
+      if (!visited.has(url)) {
+        visited.add(url); // Mark as visited immediately to prevent duplicates
+        batch.push(url);
       }
-      
-      const html = await response.text();
-      const $ = cheerio.load(html);
-      
-      // Extract Content
-      const title = $('title').text().trim() || null;
-      const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
-      const h1 = $('h1').first().text().trim() || null;
-      
-      $('script, style, noscript').remove();
-      const textContent = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
+    }
 
-      // Evaluate SEO rules
-      const results: Record<string, RuleResult> = {};
-      const issues: CrawledPage['issues'] = [];
+    if (batch.length === 0) continue;
 
-      for (const rule of seoRules) {
-        const result = rule.evaluate($);
-        results[rule.id] = result;
-        issues.push({
-          ruleId: rule.id,
-          passed: result.passed,
-          severity: result.severity,
-          details: result.details,
-        });
+    pagesCrawledThisChunk += batch.length;
+
+    // Crawl this batch in parallel
+    const discovered = await crawlBatch(
+      batch,
+      scan.id,
+      scan.websiteId,
+      scan.website.url,
+      startHostname,
+      visited,
+    );
+
+    // Add newly discovered URLs to the queue (deduplicated)
+    for (const url of discovered) {
+      if (!visited.has(url) && !pendingUrls.includes(url)) {
+        pendingUrls.push(url);
       }
-
-      // Save the Page to DB
-      const page = await prisma.page.upsert({
-        where: {
-          websiteId_url: { websiteId: scan.websiteId, url: currentUrl },
-        },
-        update: { title, metaDesc, h1, textContent },
-        create: { websiteId: scan.websiteId, url: currentUrl, title, metaDesc, h1, textContent },
-      });
-
-      // Save Issues to DB
-      await prisma.seoIssue.createMany({
-        data: issues.map(issue => ({
-          scanId: scan.id,
-          pageId: page.id,
-          checkType: issue.ruleId,
-          passed: issue.passed,
-          severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
-          details: issue.details,
-        })) as any,
-      });
-
-      // Extract new internal links
-      $('a').each((_, el) => {
-        const href = $(el).attr('href');
-        if (href) {
-          const absoluteUrl = normalizeUrl(scan.website.url, href);
-          if (absoluteUrl) {
-            const urlObj = new URL(absoluteUrl);
-            // Only add internal links to the exact same hostname
-            if (urlObj.hostname === startUrlObj.hostname) {
-              if (!visited.has(absoluteUrl) && !pendingUrls.includes(absoluteUrl)) {
-                pendingUrls.push(absoluteUrl);
-              }
-            }
-          }
-        }
-      });
-
-    } catch (error: any) {
-      console.warn(`Error crawling ${currentUrl}: ${error.message}`);
     }
   }
 
-  // Deduplicate and save queues back to DB
-  pendingUrls = [...new Set(pendingUrls)].filter(u => !visited.has(u));
-  scannedUrls = Array.from(visited);
-  const isComplete = pendingUrls.length === 0;
+  // Deduplicate remaining queue and persist state to DB
+  const dedupedPending = [...new Set(pendingUrls)].filter(u => !visited.has(u));
+  const isComplete = dedupedPending.length === 0;
 
   await prisma.scan.update({
     where: { id: scan.id },
     data: {
-      pendingUrls: JSON.stringify(pendingUrls),
-      scannedUrls: JSON.stringify(scannedUrls),
+      pendingUrls: JSON.stringify(dedupedPending),
+      scannedUrls: JSON.stringify(Array.from(visited)),
     },
   });
 
   return {
     pagesCrawled: pagesCrawledThisChunk,
-    remainingQueue: pendingUrls.length,
+    remainingQueue: dedupedPending.length,
     isComplete,
   };
 }
