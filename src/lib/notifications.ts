@@ -109,7 +109,7 @@ export async function createNotification(opts: NotifyOptions) {
     try {
       const meta = TYPE_META[opts.type] || TYPE_META['minor_seo_change'];
       await resend.emails.send({
-        from: 'SEOPulse <alerts@noreply.seopulse.app>',
+        from: 'SEOPulse Alerts <onboarding@resend.dev>',
         to: Array.from(emailsToSend),
         subject: `${meta.emoji} SEOPulse: ${meta.label}`,
         html: buildEmailHtml(opts.type, opts.message),

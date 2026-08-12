@@ -45,6 +45,18 @@ export function Header() {
     }
   };
 
+  useEffect(() => {
+    // Initial load
+    loadNotifications();
+
+    // Poll every 15 seconds
+    const interval = setInterval(() => {
+      loadNotifications();
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const markAllRead = async () => {
     await fetch("/api/notifications", { method: "PATCH" });
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
