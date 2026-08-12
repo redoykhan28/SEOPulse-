@@ -25,11 +25,17 @@ export async function GET(
       where: { id: websiteId },
       include: { 
         organization: { include: { members: true } },
+        pages: {
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, url: true, title: true, createdAt: true }
+        },
         scans: {
           orderBy: { createdAt: 'desc' },
           take: 15,
           include: {
-            seoIssues: true
+            seoIssues: {
+              include: { page: { select: { url: true, title: true } } }
+            }
           }
         },
         seoChanges: {
