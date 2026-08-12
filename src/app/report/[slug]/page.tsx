@@ -5,13 +5,9 @@ import { FileText, Download, Loader2, AlertTriangle, CheckCircle2, ExternalLink 
 import { cn } from "@/lib/utils";
 import dynamic from "next/dynamic";
 
-// Dynamically import PDF components to avoid SSR issues
-const PDFDownloadLink = dynamic(
-  () => import("@react-pdf/renderer").then(mod => mod.PDFDownloadLink),
-  { ssr: false }
-);
-const SeoReportPDF = dynamic(
-  () => import("@/lib/pdf/report").then(mod => mod.SeoReportPDF),
+// Dynamically import PDF component to avoid SSR issues with react-pdf
+const PublicReportPDFButton = dynamic(
+  () => import("@/components/pdf/PublicReportPDFButton"),
   { ssr: false }
 );
 
@@ -78,15 +74,7 @@ export default function ReportPage({ params }: { params: Promise<{ slug: string 
             </div>
           </div>
 
-          {SeoReportPDF && PDFDownloadLink && (
-            <PDFDownloadLink
-              document={<SeoReportPDF data={reportData} />}
-              fileName={`seopulse-${hostname}-${reportData.month.replace(/\s/g, '-')}.pdf`}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] cursor-pointer"
-            >
-              {({ loading }) => loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating...</> : <><Download className="h-4 w-4" /> Download PDF</>}
-            </PDFDownloadLink>
-          )}
+          <PublicReportPDFButton reportData={reportData} />
         </div>
 
         {/* Score Cards */}
