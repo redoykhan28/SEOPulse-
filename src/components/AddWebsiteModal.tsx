@@ -20,6 +20,7 @@ export function AddWebsiteModal({ isOpen, onClose, onSuccess }: AddWebsiteModalP
   const [url, setUrl] = useState("");
   const [frequency, setFrequency] = useState("WEEKLY");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
   const { success: showSuccess, error: showError } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
 
