@@ -214,7 +214,7 @@ export function TechnicalReportPDF({ websiteUrl, score, date, issues }: Technica
   // Aggregate issues by checkType so the PDF isn't a million pages long.
   // We'll show the check, its status, and sample affected pages.
   
-  const groupedIssues = issues.reduce<Record<string, SeoIssue[]>>((acc, issue) => {
+  const groupedIssues = (issues || []).reduce<Record<string, SeoIssue[]>>((acc, issue) => {
     if (!acc[issue.checkType]) acc[issue.checkType] = [];
     acc[issue.checkType].push(issue);
     return acc;
@@ -283,18 +283,16 @@ export function TechnicalReportPDF({ websiteUrl, score, date, issues }: Technica
                   
                   <Text style={styles.issueDetails}>
                     Failed on {failedItems.length} page{failedItems.length !== 1 ? 's' : ''}. 
-                    Example: {failedItems[0]?.details}
+                    Example: {failedItems[0]?.details || ''}
                   </Text>
                   
                   {/* List up to 3 affected pages as examples */}
-                  {failedItems.slice(0, 3).map((item, idx) => (
-                    item.page ? (
-                      <Text key={idx} style={styles.pageRef}>• {item.page.url}</Text>
-                    ) : null
+                  {failedItems.slice(0, 3).filter(item => item.page).map((item, idx) => (
+                    <Text key={idx} style={styles.pageRef}>• {item.page!.url}</Text>
                   ))}
-                  {failedItems.length > 3 && (
+                  {failedItems.length > 3 ? (
                     <Text style={styles.pageRef}>• ...and {failedItems.length - 3} more</Text>
-                  )}
+                  ) : <Text style={{ display: 'none' }}></Text>}
 
                   <View style={styles.suggestionBox}>
                     <Text style={styles.suggestionTitle}>How to fix it</Text>
