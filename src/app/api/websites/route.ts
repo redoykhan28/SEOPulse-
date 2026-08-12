@@ -127,6 +127,11 @@ export async function GET(req: NextRequest) {
                 scans: {
                   orderBy: { createdAt: "desc" },
                   take: 1,
+                  include: {
+                    seoIssues: {
+                      include: { page: { select: { url: true, title: true } } }
+                    }
+                  }
                 },
               },
               orderBy: { createdAt: "desc" },
