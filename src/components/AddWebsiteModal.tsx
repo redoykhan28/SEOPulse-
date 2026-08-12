@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { X, Globe, Loader2, CheckCircle2 } from "lucide-react";
+import { useToast } from "@/components/ui/Toast";
 
 interface AddWebsiteModalProps {
   isOpen: boolean;
@@ -19,7 +20,7 @@ export function AddWebsiteModal({ isOpen, onClose, onSuccess }: AddWebsiteModalP
   const [url, setUrl] = useState("");
   const [frequency, setFrequency] = useState("WEEKLY");
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+  const { success: showSuccess, error: showError } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -54,14 +55,17 @@ export function AddWebsiteModal({ isOpen, onClose, onSuccess }: AddWebsiteModalP
 
       if (!res.ok) {
         setError(data.error || "Failed to add website. Please try again.");
+        showError("Failed to add website", data.error);
         setIsLoading(false);
         return;
       }
 
+      showSuccess("Website Added", `${normalizedUrl} is now being monitored.`);
       onSuccess();
       onClose();
     } catch {
       setError("Something went wrong. Please check your connection.");
+      showError("Connection Error", "Please check your network connection and try again.");
       setIsLoading(false);
     }
   }

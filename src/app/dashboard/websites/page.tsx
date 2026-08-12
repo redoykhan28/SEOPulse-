@@ -13,6 +13,9 @@ import {
 } from "lucide-react";
 import { AddWebsiteModal } from "@/components/AddWebsiteModal";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/Toast";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { TableRowSkeleton } from "@/components/ui/Skeleton";
 
 type Website = {
   id: string;
@@ -56,6 +59,8 @@ export default function WebsitesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; url: string } | null>(null);
+  const { success, error: toastError } = useToast();
 
   const fetchWebsites = useCallback(async () => {
     setIsLoading(true);
@@ -75,19 +80,21 @@ export default function WebsitesPage() {
   }, [fetchWebsites]);
 
   const handleDeleteWebsite = async (id: string, url: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete ${url}? This action cannot be undone and will delete all scan history.`
-      )
-    )
-      return;
+    setDeleteTarget({ id, url });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      const res = await fetch(`/api/websites/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/websites/${deleteTarget.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete website");
-      setWebsites((prev) => prev.filter((w) => w.id !== id));
+      setWebsites((prev) => prev.filter((w) => w.id !== deleteTarget.id));
+      success("Website deleted", `${deleteTarget.url} has been removed.`);
     } catch (err) {
-      alert("Error deleting website.");
+      toastError("Delete failed", "Could not delete the website. Please try again.");
       console.error(err);
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -98,6 +105,15 @@ export default function WebsitesPage() {
 
   return (
     <>
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        title="Delete Website"
+        message={`Are you sure you want to delete ${deleteTarget?.url}? This will permanently remove all scan history and data.`}
+        confirmLabel="Yes, Delete"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
       <div className="space-y-6">
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -147,9 +163,10 @@ export default function WebsitesPage() {
           </div>
 
           {isLoading ? (
-            <div className="p-16 text-center">
-              <Loader2 className="mx-auto h-8 w-8 text-indigo-500 animate-spin mb-3" />
-              <p className="text-sm text-gray-400">Loading websites...</p>
+            <div className="divide-y divide-gray-100 dark:divide-white/5">
+              <table className="w-full"><tbody>
+                {Array.from({ length: 4 }).map((_, i) => <TableRowSkeleton key={i} />)}
+              </tbody></table>
             </div>
           ) : websites.length === 0 ? (
             <div className="p-16 text-center">

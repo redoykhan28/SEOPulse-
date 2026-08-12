@@ -4,18 +4,19 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   Globe,
-  AlertTriangle,
   CheckCircle2,
   Plus,
   Clock,
   TrendingUp,
   RefreshCw,
   ExternalLink,
-  Loader2,
   Trash2,
 } from "lucide-react";
 import { AddWebsiteModal } from "@/components/AddWebsiteModal";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/Toast";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { DashboardSkeleton, TableRowSkeleton } from "@/components/ui/Skeleton";
 
 type Website = {
   id: string;
@@ -57,6 +58,8 @@ export default function DashboardPage() {
   const [websites, setWebsites] = useState<Website[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; url: string } | null>(null);
+  const { success, error: toastError } = useToast();
 
   const fetchWebsites = useCallback(async () => {
     setIsLoading(true);
@@ -76,15 +79,21 @@ export default function DashboardPage() {
   }, [fetchWebsites]);
 
   const handleDeleteWebsite = async (id: string, url: string) => {
-    if (!confirm(`Are you sure you want to delete ${url}? This action cannot be undone and will delete all scan history.`)) return;
-    
+    setDeleteTarget({ id, url });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      const res = await fetch(`/api/websites/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/websites/${deleteTarget.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error("Failed to delete website");
-      setWebsites(prev => prev.filter(w => w.id !== id));
+      setWebsites(prev => prev.filter(w => w.id !== deleteTarget.id));
+      success("Website deleted", `${deleteTarget.url} has been removed.`);
     } catch (err) {
-      alert("Error deleting website.");
+      toastError("Delete failed", "Could not delete the website. Please try again.");
       console.error(err);
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -135,6 +144,15 @@ export default function DashboardPage() {
 
   return (
     <>
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        title="Delete Website"
+        message={`Are you sure you want to delete ${deleteTarget?.url}? This will permanently remove all scan history and data.`}
+        confirmLabel="Yes, Delete"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
       <div className="space-y-6">
         {/* Page Header */}
         <div className="flex items-center justify-between">
@@ -163,24 +181,26 @@ export default function DashboardPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {stats.map(({ label, value, icon: Icon, bg, iconColor }) => (
-            <div
-              key={label}
-              className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-5 hover:border-indigo-200 dark:hover:border-white/20 transition-all duration-300"
-            >
-              <div className="flex items-center gap-4">
-                <div className={cn("p-3 rounded-xl", bg)}>
-                  <Icon className={cn("h-6 w-6", iconColor)} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">{value}</p>
+        {!isLoading && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {stats.map(({ label, value, icon: Icon, bg, iconColor }) => (
+              <div
+                key={label}
+                className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-5 hover:border-indigo-200 dark:hover:border-white/20 transition-all duration-300"
+              >
+                <div className="flex items-center gap-4">
+                  <div className={cn("p-3 rounded-xl", bg)}>
+                    <Icon className={cn("h-6 w-6", iconColor)} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">{value}</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Website Table */}
         <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
@@ -190,9 +210,10 @@ export default function DashboardPage() {
           </div>
 
           {isLoading ? (
-            <div className="p-16 text-center">
-              <Loader2 className="mx-auto h-8 w-8 text-indigo-500 animate-spin mb-3" />
-              <p className="text-sm text-gray-400">Loading websites...</p>
+            <div className="divide-y divide-gray-100 dark:divide-white/5">
+              <table className="w-full"><tbody>
+                {Array.from({ length: 3 }).map((_, i) => <TableRowSkeleton key={i} />)}
+              </tbody></table>
             </div>
           ) : websites.length === 0 ? (
             <div className="p-16 text-center">

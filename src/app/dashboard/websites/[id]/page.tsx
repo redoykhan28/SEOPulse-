@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useToast } from "@/components/ui/Toast";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { WebsiteDetailsSkeleton } from "@/components/ui/Skeleton";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type PageRef = { url: string; title: string | null };
@@ -299,25 +302,32 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{ crawled: number; remaining: number } | null>(null);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
   const [showPagesModal, setShowPagesModal] = useState(false);
   const [justUpdated, setJustUpdated] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
+  const { success, error: toastError, info } = useToast();
 
   const handleDelete = async () => {
     if (!website) return;
-    if (!confirm(`Are you sure you want to delete ${website.url}? This action cannot be undone.`)) return;
-    
+    setDeleteTarget(website.url);
+  };
+
+  const confirmDelete = async () => {
+    if (!website) return;
     setIsDeleting(true);
     try {
       const res = await fetch(`/api/websites/${website.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error("Failed to delete website");
+      success("Website deleted", `${website.url} has been removed.`);
       router.push('/dashboard');
     } catch (err) {
-      alert("Error deleting website.");
+      toastError("Delete failed", "Could not delete the website. Please try again.");
       setIsDeleting(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -363,10 +373,12 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
       } else if (data.status === "COMPLETED") {
         setScanProgress(null);
         setIsScanning(false);
+        success("Audit Complete", `Successfully scanned ${website?.url}`);
         await fetchWebsiteDetails(true); // true = scroll to report after update
       }
     } catch (err: any) {
       setError(err.message);
+      toastError("Audit failed", err.message);
       setIsScanning(false);
       setScanProgress(null);
     }
@@ -375,6 +387,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const handleScan = async () => {
     setIsScanning(true);
     setError("");
+    info("Audit Started", `Initializing deep scan for ${website?.url}...`);
     setScanProgress({ crawled: 0, remaining: 1 });
     try {
       const res = await fetch(`/api/websites/${websiteId}/scan`, { method: "POST" });
@@ -383,6 +396,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
       await processChunk(data.scanId);
     } catch (err: any) {
       setError(err.message);
+      toastError("Audit failed", err.message);
       setIsScanning(false);
       setScanProgress(null);
     }
@@ -390,8 +404,8 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <Loader2 className="h-8 w-8 text-indigo-500 animate-spin" />
+      <div className="pt-4">
+        <WebsiteDetailsSkeleton />
       </div>
     );
   }
@@ -449,6 +463,16 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
 
   return (
     <div className="space-y-6">
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        title="Delete Website"
+        message={`Are you sure you want to delete ${deleteTarget}? This will permanently remove all scan history and data.`}
+        confirmLabel="Yes, Delete"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
       {/* Crawled Pages Modal */}
       {showPagesModal && (
         <CrawledPagesModal pages={website.pages || []} onClose={() => setShowPagesModal(false)} />
