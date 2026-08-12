@@ -53,6 +53,7 @@ type SeoChange = {
   updatedAt: string;
   scanFrequency: string;
   notifyEmails: string[];
+  enabledAlerts: string[];
   pages?: { url: string; title: string | null }[];
 };
 
@@ -495,6 +496,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
             url: website.url,
             scanFrequency: website.scanFrequency,
             notifyEmails: website.notifyEmails,
+            enabledAlerts: website.enabledAlerts,
           }}
         />
       )}

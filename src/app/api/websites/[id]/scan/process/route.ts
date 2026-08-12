@@ -58,12 +58,14 @@ export async function POST(
             data: { websiteId, field: "score", before: previousScan.overallScore.toString(), after: overallScore.toString(), impact }
           });
 
-          // Fire notifications
+          // Fire notifications only if score_drop is enabled for this website
           if (scoreDiff < 0) {
             const hostname = new URL(scan.website.url).hostname;
             const additionalEmails = (scan.website as any).notifyEmails as string[] || [];
+            const enabledAlerts = (scan.website as any).enabledAlerts as string[] || [];
+            const alertEnabled = enabledAlerts.includes("score_drop");
             for (const member of scan.website.organization.members) {
-              if (await isAlertEnabled(member.userId, "score_drop")) {
+              if (alertEnabled && await isAlertEnabled(member.userId, "score_drop")) {
                 await createNotification({
                   userId: member.userId,
                   organizationId: scan.website.organizationId,

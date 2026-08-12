@@ -86,6 +86,7 @@ model Website {
   reports      Report[]
   keywordFiles KeywordFile[]
   notifyEmails String[]     @default([])
+  enabledAlerts String[]    @default(["score_drop", "broken_links", "site_offline", "title_change", "meta_change", "sitemap_unavailable"])
 }
 
 model Page {

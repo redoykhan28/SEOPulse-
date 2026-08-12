@@ -157,13 +157,14 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { scanFrequency, notifyEmails } = body;
+    const { scanFrequency, notifyEmails, enabledAlerts } = body;
 
     const updatedWebsite = await prisma.website.update({
       where: { id: websiteId },
       data: {
         ...(scanFrequency && { scanFrequency }),
-        ...(notifyEmails && Array.isArray(notifyEmails) && { notifyEmails })
+        ...(notifyEmails && Array.isArray(notifyEmails) && { notifyEmails }),
+        ...(enabledAlerts && Array.isArray(enabledAlerts) && { enabledAlerts }),
       }
     });
 
