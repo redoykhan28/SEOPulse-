@@ -61,7 +61,7 @@ export default function DashboardPage() {
   const fetchWebsites = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/websites");
+      const res = await fetch("/api/websites", { cache: "no-store" });
       const data = await res.json();
       setWebsites(data.websites || []);
     } catch {
@@ -273,7 +273,7 @@ export default function DashboardPage() {
                             : "Never"}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center justify-end gap-2 transition-opacity">
                             <a
                               href={site.url}
                               target="_blank"

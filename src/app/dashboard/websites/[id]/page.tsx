@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { useState, useEffect, useCallback, use, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { 
@@ -303,6 +303,8 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<'ALL' | 'FAILED' | 'PASSED' | 'HISTORY'>('ALL');
   const [showPagesModal, setShowPagesModal] = useState(false);
+  const [justUpdated, setJustUpdated] = useState(false);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   const handleDelete = async () => {
     if (!website) return;
@@ -319,12 +321,19 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
     }
   };
 
-  const fetchWebsiteDetails = useCallback(async () => {
+  const fetchWebsiteDetails = useCallback(async (scrollToReport = false) => {
     try {
-      const res = await fetch(`/api/websites/${websiteId}`);
+      const res = await fetch(`/api/websites/${websiteId}`, { cache: 'no-store' });
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setWebsite(data.website);
+      if (scrollToReport) {
+        setJustUpdated(true);
+        setTimeout(() => {
+          reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+        setTimeout(() => setJustUpdated(false), 2000);
+      }
     } catch (err) {
       setError("Failed to load website details.");
     } finally {
@@ -354,7 +363,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
       } else if (data.status === "COMPLETED") {
         setScanProgress(null);
         setIsScanning(false);
-        await fetchWebsiteDetails();
+        await fetchWebsiteDetails(true); // true = scroll to report after update
       }
     } catch (err: any) {
       setError(err.message);
@@ -599,7 +608,15 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
       )}
 
       {/* ── Accordion Tech Report ────────────────────────────────────────── */}
-      <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
+      <div
+        ref={reportRef}
+        className={cn(
+          "bg-white dark:bg-[#111111] border rounded-xl overflow-hidden transition-all duration-700",
+          justUpdated
+            ? "border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-300 dark:ring-indigo-500/30"
+            : "border-gray-200 dark:border-white/10"
+        )}
+      >
         {/* Tab bar */}
         <div className="px-6 py-4 border-b border-gray-200 dark:border-white/10 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">Full Technical Report</h2>
