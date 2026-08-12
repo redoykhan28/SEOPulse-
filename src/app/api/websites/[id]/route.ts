@@ -85,7 +85,7 @@ export async function DELETE(
 
     const website = await prisma.website.findUnique({
       where: { id: websiteId },
-      include: { organization: { include: { members: true } } },
+      include: { organization: { include: { members: { include: { user: true } } } } },
     });
 
     if (!website) {
@@ -101,12 +101,18 @@ export async function DELETE(
       where: { id: websiteId }
     });
 
-    // Notify about website deletion
+    // Notify all org members about website deletion
     import("@/lib/notifications").then(({ createNotification }) => {
+      const memberEmails = website.organization.members
+        .map((m: any) => m.user?.email)
+        .filter(Boolean) as string[];
+      
       createNotification({
         organizationId: website.organizationId,
-        type: "minor_seo_change",
-        message: `Website deleted: ${website.url}`,
+        type: "website_deleted",
+        message: `Website removed from monitoring: ${website.url}`,
+        userEmail: memberEmails[0],
+        additionalEmails: memberEmails.slice(1),
       });
     }).catch(console.error);
 

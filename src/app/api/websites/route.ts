@@ -88,9 +88,11 @@ export async function POST(req: NextRequest) {
     // Notify about website addition
     import("@/lib/notifications").then(({ createNotification }) => {
       createNotification({
+        userId: dbUser!.id,
         organizationId: website.organizationId,
-        type: "minor_seo_change",
-        message: `Website added: ${website.url}`,
+        type: "website_added",
+        message: `Website added for monitoring: ${website.url}`,
+        userEmail: user.email!,
       });
     }).catch(console.error);
 
