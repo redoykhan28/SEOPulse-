@@ -201,7 +201,7 @@ async function crawlBatch(
         // --- SEO Rules Evaluation ---
         const issues: CrawledPage['issues'] = [];
         for (const rule of seoRules) {
-          const result = rule.evaluate($);
+          const result = rule.evaluate($, currentUrl);
           issues.push({
             ruleId: rule.id,
             passed: result.passed,
