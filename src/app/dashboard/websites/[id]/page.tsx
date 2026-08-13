@@ -25,7 +25,7 @@ const DynamicPDFDownloadButton = dynamic(
 // ─── Types ────────────────────────────────────────────────────────────────────
 type PageRef = { url: string; title: string | null };
 
-type SeoIssue = {
+export type SeoIssue = {
   id: string;
   checkType: string;
   passed: boolean;
@@ -50,11 +50,6 @@ type SeoChange = {
   after: string | null;
   impact: string | null;
   createdAt: string;
-  updatedAt: string;
-  scanFrequency: string;
-  notifyEmails: string[];
-  enabledAlerts: string[];
-  pages?: { url: string; title: string | null }[];
 };
 
 type CrawledPage = {
@@ -68,6 +63,8 @@ type WebsiteDetails = {
   id: string;
   url: string;
   scanFrequency: string;
+  notifyEmails: string[];
+  enabledAlerts: string[];
   scans: Scan[];
   seoChanges: SeoChange[];
   pages: CrawledPage[];
@@ -671,7 +668,7 @@ export default function WebsiteDetailsPage({ params }: { params: Promise<{ id: s
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#374151" opacity={0.15} />
                 <XAxis dataKey="completedAt" tickFormatter={val => val ? new Date(val).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} dy={10} />
                 <YAxis domain={[0, 100]} stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} dx={-10} />
-                <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', color: '#fff' }} labelFormatter={val => val ? new Date(val).toLocaleString() : ''} />
+                <Tooltip contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', color: '#fff' }} labelFormatter={val => val ? new Date(val as string | number).toLocaleString() : ''} />
                 <Line type="monotone" dataKey="overallScore" stroke="#4f46e5" strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: '#fff', stroke: '#4f46e5' }} activeDot={{ r: 6 }} name="SEO Score" />
               </LineChart>
             </ResponsiveContainer>
