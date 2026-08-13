@@ -140,17 +140,62 @@ export const seoRules: SEORule[] = [
     name: 'Image Alt Attributes',
     category: 'Accessibility',
     evaluate: ($) => {
-      const images = $('img');
-      if (images.length === 0) return { passed: true, severity: 'INFO', details: 'No images found on page.', weight: 10 };
-      
+      // Select ALL image elements — including those using lazy-load attributes
+      // Elementor uses data-lazy-src, WP core uses loading="lazy" + src,
+      // lazysizes/other plugins use data-src, data-original, data-lazy.
+      // We consider an element an "image" if it has ANY of these attributes.
+      const images = $('img, [data-src], [data-lazy-src], [data-lazy], [data-original]');
+
+      if (images.length === 0) {
+        // If ZERO images are found, it might be that images are loaded purely
+        // by JS (unlikely on WordPress, but possible). Return a warning instead
+        // of a false-positive PASS so the user is aware.
+        return {
+          passed: false,
+          severity: 'WARNING',
+          details: 'No images detected. If this page has images, they may be rendered purely by JavaScript (e.g. heavy SPA framework).',
+          weight: 5,
+        };
+      }
+
       let missingAltCount = 0;
+      const missingUrls: string[] = [];
+
       images.each((_, el) => {
         const alt = $(el).attr('alt');
-        if (alt === undefined || alt === null) missingAltCount++;
+        if (alt === undefined || alt === null) {
+          missingAltCount++;
+          // Collect the image URL for a useful error message
+          const url =
+            $(el).attr('src') ||
+            $(el).attr('data-lazy-src') ||
+            $(el).attr('data-src') ||
+            $(el).attr('data-lazy') ||
+            $(el).attr('data-original') ||
+            '';
+          if (url && missingUrls.length < 5) {
+            // Trim long URLs for readability in the UI
+            missingUrls.push(url.length > 60 ? url.substring(0, 57) + '...' : url);
+          }
+        }
       });
-      
-      if (missingAltCount > 0) return { passed: false, severity: 'WARNING', details: `${missingAltCount} out of ${images.length} images are missing alt attributes.`, weight: 10 };
-      return { passed: true, severity: 'INFO', details: 'All images have alt attributes.', weight: 10 };
+
+      if (missingAltCount > 0) {
+        const urlList = missingUrls.length > 0 ? ` Affected: ${missingUrls.join(', ')}` : '';
+        return {
+          passed: false,
+          severity: 'WARNING',
+          details: `${missingAltCount} of ${images.length} image(s) are missing alt text (includes lazy-loaded images).${urlList}`,
+          weight: 10,
+        };
+      }
+
+      return {
+        passed: true,
+        severity: 'INFO',
+        details: `All ${images.length} image(s) have alt attributes (including lazy-loaded images).`,
+        weight: 10,
+      };
     }
   },
   {
