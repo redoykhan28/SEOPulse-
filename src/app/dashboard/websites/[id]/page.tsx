@@ -85,6 +85,7 @@ const RULE_META: Record<string, { label: string; category: string }> = {
   image_alt_attributes: { label: "Image Alt Attributes",     category: "Accessibility" },
   form_labels:          { label: "Form Input Labels",        category: "Accessibility" },
   empty_links:          { label: "Descriptive Link Text",    category: "Accessibility" },
+  broken_links:         { label: "Broken Links (404s)",      category: "Technical" },
 };
 
 const CATEGORY_COLORS: Record<string, string> = {

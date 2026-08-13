@@ -101,6 +101,49 @@ function normalizeUrl(baseUrl: string, href: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Broken Link Checker — checks a single URL via HEAD request with 5s timeout.
+// Results are cached in a per-scan Map to avoid redundant network requests.
+// Returns the broken URL + status code, or null if the link is healthy.
+// ---------------------------------------------------------------------------
+async function checkLink(
+  url: string,
+  cache: Map<string, number | 'timeout' | 'error'>,
+): Promise<{ url: string; status: number | string } | null> {
+  // Return cached result immediately
+  if (cache.has(url)) {
+    const cached = cache.get(url)!;
+    if (typeof cached === 'number' && cached < 400) return null;
+    return { url, status: cached };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    let status: number;
+    try {
+      const res = await fetch(url, {
+        method: 'HEAD',
+        headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
+        signal: controller.signal,
+        redirect: 'follow',
+      });
+      status = res.status;
+    } finally {
+      clearTimeout(timeout);
+    }
+    cache.set(url, status);
+    return status >= 400 ? { url, status } : null;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      cache.set(url, 'timeout');
+      return { url, status: 'timeout (5s)' };
+    }
+    cache.set(url, 'error');
+    return null; // Network error — don't penalise (could be bot block)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // FIX 2: Parallel page fetcher with a concurrency limit (default: 5)
 // Processes `batch` of URLs simultaneously — safe for shared-hosting targets
 // ---------------------------------------------------------------------------
@@ -111,6 +154,7 @@ async function crawlBatch(
   websiteUrl: string,
   startHostname: string,
   visited: Set<string>,
+  linkStatusCache: Map<string, number | 'timeout' | 'error'>,
 ): Promise<string[]> {
   // Returns a list of newly discovered internal URLs from this batch
   const newlyDiscovered: string[] = [];
@@ -184,23 +228,54 @@ async function crawlBatch(
           })) as any,
         });
 
-        // --- Discover new internal links ---
+        // --- Collect all links for broken-link checking + discovery ---
+        const allHrefs: string[] = [];
         $('a[href]').each((_, el) => {
           const href = $(el).attr('href');
           if (!href) return;
-
+          // Skip non-HTTP schemes (mailto, tel, javascript, #hash only)
+          if (/^(mailto:|tel:|javascript:|#)/i.test(href.trim())) return;
           const absoluteUrl = normalizeUrl(websiteUrl, href);
-          if (!absoluteUrl) return;
+          if (absoluteUrl) allHrefs.push(absoluteUrl);
+        });
 
+        // --- Discover new internal links ---
+        for (const absoluteUrl of allHrefs) {
           try {
             const linkHostname = new URL(absoluteUrl).hostname;
-            // Only follow links within the exact same domain
-            if (linkHostname !== startHostname) return;
-            // Skip already-visited or already-queued
-            if (!visited.has(absoluteUrl)) {
+            if (linkHostname === startHostname && !visited.has(absoluteUrl)) {
               newlyDiscovered.push(absoluteUrl);
             }
           } catch { /* ignore malformed URLs */ }
+        }
+
+        // --- Check for broken links (HEAD requests, max 25 per page) ---
+        const uniqueLinks = [...new Set(allHrefs)];
+        // Internal links that are already visited are known-good; skip them.
+        // Limit external/unknown links to 25 per page to keep scans fast.
+        const linksToCheck = uniqueLinks
+          .filter(u => !visited.has(u) || linkStatusCache.has(u))
+          .slice(0, 25);
+
+        const brokenResults = (await Promise.all(
+          linksToCheck.map(u => checkLink(u, linkStatusCache))
+        )).filter(Boolean) as { url: string; status: number | string }[];
+
+        // Save broken_links issue to DB for this page
+        const brokenCount = brokenResults.length;
+        const brokenDetails = brokenCount > 0
+          ? `${brokenCount} broken link(s) found: ${brokenResults.slice(0, 5).map(r => `${r.url} (${r.status})`).join(', ')}${brokenCount > 5 ? ` …and ${brokenCount - 5} more` : ''}`
+          : 'No broken links detected on this page.';
+
+        await prisma.seoIssue.create({
+          data: {
+            scanId,
+            pageId: page.id,
+            checkType: 'broken_links',
+            passed: brokenCount === 0,
+            severity: brokenCount > 0 ? 'FAILED' : 'WARNING',
+            details: brokenDetails,
+          } as any,
         });
 
       } catch (error: any) {
@@ -244,6 +319,7 @@ export async function processCrawlChunk(
   const scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
 
   const visited = new Set<string>(scannedUrls);
+  const linkStatusCache = new Map<string, number | 'timeout' | 'error'>();
   let pagesCrawledThisChunk = 0;
 
   // Process URLs in parallel batches of `concurrency` until chunk is full
@@ -274,6 +350,7 @@ export async function processCrawlChunk(
       scan.website.url,
       startHostname,
       visited,
+      linkStatusCache,
     );
 
     // Add newly discovered URLs to the queue (deduplicated)
