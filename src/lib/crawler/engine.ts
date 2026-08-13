@@ -144,6 +144,88 @@ async function checkLink(
 }
 
 // ---------------------------------------------------------------------------
+// Smart Fetch with JS Detection and Firecrawl Fallback
+// ---------------------------------------------------------------------------
+async function smartFetch(url: string, controller: AbortController): Promise<string | null> {
+  // Step 1: Fast & Free Fetch
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err.name !== 'AbortError') console.warn(`[Crawler] Network error on ${url}: ${err.message}`);
+    return null;
+  }
+
+  if (!response.ok) {
+    console.warn(`[Crawler] ${response.status} on ${url}`);
+    return null;
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('text/html')) return null;
+
+  const rawHtml = await response.text();
+  const $ = cheerio.load(rawHtml);
+
+  // Step 2: JS-Heavy Detection
+  const hasSpaMount = $('#root, #__next, #app').length > 0;
+  const isBodyEmpty = $('body').text().replace(/\s+/g, '').length < 300;
+  const hasNuxt = rawHtml.includes('__NUXT__');
+  
+  const isJsHeavy = (hasSpaMount && isBodyEmpty) || hasNuxt;
+
+  // Step 3: Route to Firecrawl if JS-heavy and API key exists
+  const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+  if (isJsHeavy && firecrawlKey) {
+    try {
+      console.log(`[Crawler] JS-Heavy site detected. Routing ${url} to Firecrawl...`);
+      // Use a new timeout for Firecrawl since it takes longer
+      const fcController = new AbortController();
+      const fcTimeout = setTimeout(() => fcController.abort(), 20000); // 20s for Firecrawl
+      
+      let fcResponse: Response;
+      try {
+        fcResponse = await fetch('https://api.firecrawl.dev/v1/scrape', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${firecrawlKey}`,
+          },
+          body: JSON.stringify({
+            url: url,
+            formats: ['html'],
+          }),
+          signal: fcController.signal,
+        });
+      } finally {
+        clearTimeout(fcTimeout);
+      }
+
+      if (fcResponse.ok) {
+        const fcData = await fcResponse.json();
+        if (fcData.success && fcData.data && fcData.data.html) {
+           return fcData.data.html; // Return the fully rendered HTML
+        }
+      }
+      
+      // If we reach here, Firecrawl failed (e.g. out of credits or 500 error)
+      console.warn(`[Crawler] Firecrawl failed (status: ${fcResponse.status}). Falling back to fast fetch for ${url}`);
+    } catch (err: any) {
+      console.warn(`[Crawler] Firecrawl fetch error: ${err.message}. Falling back to fast fetch for ${url}`);
+    }
+  }
+
+  // Fallback: return the raw HTML
+  return rawHtml;
+}
+
+// ---------------------------------------------------------------------------
 // FIX 2: Parallel page fetcher with a concurrency limit (default: 5)
 // Processes `batch` of URLs simultaneously — safe for shared-hosting targets
 // ---------------------------------------------------------------------------
@@ -165,29 +247,9 @@ async function crawlBatch(
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15000); // 15s per page timeout
 
-        let response: Response;
-        try {
-          response = await fetch(currentUrl, {
-            headers: {
-              'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)',
-              'Accept': 'text/html,application/xhtml+xml',
-            },
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
+        const html = await smartFetch(currentUrl, controller);
+        if (!html) return;
 
-        if (!response.ok) {
-          console.warn(`[Crawler] ${response.status} on ${currentUrl}`);
-          return;
-        }
-
-        // Only process HTML pages (skip PDFs, images, etc.)
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.includes('text/html')) return;
-
-        const html = await response.text();
         const $ = cheerio.load(html);
 
         // --- Content Extraction ---
