@@ -390,6 +390,32 @@ export async function processCrawlChunk(
     ? JSON.parse(scan.pendingUrls)
     : [normalizeUrl(scan.website.url, scan.website.url)!];
   const scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
+  
+  // Restore organically discovered URLs state
+  let discoveredUrls: string[] = (scan as any).discoveredUrls ? JSON.parse((scan as any).discoveredUrls) : [];
+  const discoveredSet = new Set<string>(discoveredUrls);
+
+  // If this is the very first run, fetch the sitemap to seed the queue
+  if (scannedUrls.length === 0) {
+    try {
+      const sitemapUrl = new URL('/sitemap.xml', scan.website.url).href;
+      const sitemapRes = await fetch(sitemapUrl, {
+        headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
+      });
+      if (sitemapRes.ok) {
+        const sitemapText = await sitemapRes.text();
+        const locMatches = [...sitemapText.matchAll(/<loc>(.*?)<\/loc>/g)];
+        for (const match of locMatches) {
+          const url = normalizeUrl(scan.website.url, match[1]);
+          if (url && !pendingUrls.includes(url)) {
+            pendingUrls.push(url);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[Crawler] Failed to parse sitemap for ${scan.website.url}`);
+    }
+  }
 
   const visited = new Set<string>(scannedUrls);
   const linkStatusCache = new Map<string, number | 'timeout' | 'error'>();
@@ -428,6 +454,7 @@ export async function processCrawlChunk(
 
     // Add newly discovered URLs to the queue (deduplicated)
     for (const url of discovered) {
+      discoveredSet.add(url);
       if (!visited.has(url) && !pendingUrls.includes(url)) {
         pendingUrls.push(url);
       }
@@ -443,8 +470,42 @@ export async function processCrawlChunk(
     data: {
       pendingUrls: JSON.stringify(dedupedPending),
       scannedUrls: JSON.stringify(Array.from(visited)),
-    },
+      discoveredUrls: JSON.stringify(Array.from(discoveredSet)),
+    } as any,
   });
+
+  // Evaluate Orphan Pages if the scan is completely finished
+  if (isComplete) {
+    const crawledPages = await prisma.page.findMany({
+      where: { websiteId: scan.websiteId }
+    });
+    
+    const rootUrl = normalizeUrl(scan.website.url, scan.website.url);
+    const orphanIssues: any[] = [];
+    
+    for (const page of crawledPages) {
+      // The homepage is never an orphan
+      if (page.url === rootUrl) continue;
+      
+      // If it's not in the discoveredSet, it wasn't organically linked anywhere
+      if (!discoveredSet.has(page.url)) {
+        orphanIssues.push({
+          scanId: scan.id,
+          pageId: page.id,
+          checkType: 'orphan_page',
+          passed: false,
+          severity: 'WARNING',
+          details: 'This page was found in the sitemap but is not linked from anywhere on the website (orphan page).'
+        });
+      }
+    }
+    
+    if (orphanIssues.length > 0) {
+      await prisma.seoIssue.createMany({
+        data: orphanIssues
+      });
+    }
+  }
 
   return {
     pagesCrawled: pagesCrawledThisChunk,

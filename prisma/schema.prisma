@@ -120,8 +120,9 @@ model Scan {
   overallScore Int?
   
   // Queue state for deep crawling
-  pendingUrls  String?    // JSON string array of URLs to crawl
-  scannedUrls  String?    // JSON string array of URLs already crawled
+  pendingUrls    String?    // JSON string array of URLs to crawl
+  scannedUrls    String?    // JSON string array of URLs already crawled
+  discoveredUrls String?    // JSON string array of organically discovered internal URLs
   
   startedAt    DateTime?
   completedAt  DateTime?
