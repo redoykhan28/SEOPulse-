@@ -439,14 +439,14 @@ export const seoRules: SEORule[] = [
             $(el).attr('data-original') ||
             $(el).attr('data-srcset')?.split(',')[0]?.trim().split(' ')[0] ||
             '';
-          if (url && missingUrls.length < 5) {
-            missingUrls.push(url.length > 60 ? url.substring(0, 57) + '...' : url);
+          if (url && missingUrls.length < 20) {
+            missingUrls.push(url);
           }
         }
       });
 
       if (missingAltCount > 0) {
-        const urlList = missingUrls.length > 0 ? ` Affected: ${missingUrls.join(', ')}` : '';
+        const urlList = missingUrls.length > 0 ? ` Affected: ${missingUrls.join('|')}` : '';
         return {
           passed: false,
           severity: 'WARNING',

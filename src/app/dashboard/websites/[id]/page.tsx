@@ -262,7 +262,26 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
                     {issue.page.title || issue.page.url}
                   </a>
                 )}
-                <p className="text-sm text-gray-700 dark:text-gray-300">{issue.details}</p>
+                {/* Special structured rendering for image alt issues */}
+                {checkType === 'image_alt_attributes' && issue.details.includes('Affected:') ? (() => {
+                  const [summary, affectedPart] = issue.details.split('Affected:');
+                  const imageUrls = affectedPart?.split('|').map(u => u.trim()).filter(Boolean) ?? [];
+                  return (
+                    <div>
+                      <p className="text-sm text-gray-700 dark:text-gray-300 mb-1.5">{summary.trim()}</p>
+                      <div className="space-y-1">
+                        {imageUrls.map((imgUrl, i) => (
+                          <div key={i} className="flex items-center gap-1.5 pl-2 border-l-2 border-red-300 dark:border-red-500/40">
+                            <span className="text-[10px] font-bold text-red-500 uppercase">IMG</span>
+                            <span className="text-xs text-gray-500 dark:text-gray-400 break-all font-mono">{imgUrl}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })() : (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">{issue.details}</p>
+                )}
               </div>
               <span className={cn(
                 "flex-shrink-0 px-2 py-0.5 rounded text-[10px] font-bold uppercase",
@@ -274,6 +293,7 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
               </span>
             </div>
           ))}
+
           {/* Passed pages */}
           {passed.map(issue => (
             <div key={issue.id} className="px-5 py-3 flex items-start gap-3 opacity-60">
