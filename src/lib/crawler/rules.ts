@@ -259,9 +259,10 @@ export const seoRules: SEORule[] = [
 
       images.each((_, el) => {
         const alt = $(el).attr('alt');
-        // We flag undefined or null as missing alt text.
-        // (alt="" is valid for decorative images per accessibility standards)
-        if (alt === undefined || alt === null) {
+        // We flag undefined, null, OR empty string as missing alt text.
+        // For strict SEO monitoring, even decorative images with alt="" are flagged 
+        // to ensure keywords aren't missed.
+        if (alt === undefined || alt === null || alt.trim() === '') {
           missingAltCount++;
           // Collect the image URL for a useful error message
           const url =
