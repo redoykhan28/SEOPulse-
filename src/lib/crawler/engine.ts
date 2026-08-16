@@ -522,36 +522,84 @@ export async function processCrawlChunk(
     } as any,
   });
 
-  // Evaluate Orphan Pages if the scan is completely finished
+  // ── Post-scan analysis (runs only once, when the crawl is 100% complete) ──
   if (isComplete) {
     const crawledPages = await prisma.page.findMany({
-      where: { websiteId: scan.websiteId }
+      where: { websiteId: scan.websiteId },
+      select: { id: true, url: true, title: true, metaDesc: true },
     });
-    
+
     const rootUrl = normalizeUrl(scan.website.url, scan.website.url);
-    const orphanIssues: any[] = [];
-    
+    const postScanIssues: any[] = [];
+
+    // ── 1. Orphan Page Detection ──────────────────────────────────────────
     for (const page of crawledPages) {
-      // The homepage is never an orphan
       if (page.url === rootUrl) continue;
-      
-      // If it's not in the discoveredSet, it wasn't organically linked anywhere
       if (!discoveredSet.has(page.url)) {
-        orphanIssues.push({
+        postScanIssues.push({
           scanId: scan.id,
           pageId: page.id,
           checkType: 'orphan_page',
           passed: false,
           severity: 'WARNING',
-          details: 'This page was found in the sitemap but is not linked from anywhere on the website (orphan page).'
+          details: 'This page was found in the sitemap but is not linked from anywhere on the website (orphan page).',
         });
       }
     }
-    
-    if (orphanIssues.length > 0) {
-      await prisma.seoIssue.createMany({
-        data: orphanIssues
-      });
+
+    // ── 2. Duplicate Title Detection ──────────────────────────────────────
+    // Group pages by their normalised title
+    const titleMap = new Map<string, string[]>(); // title → [url, ...]
+    for (const page of crawledPages) {
+      const t = page.title?.trim().toLowerCase();
+      if (!t) continue;
+      if (!titleMap.has(t)) titleMap.set(t, []);
+      titleMap.get(t)!.push(page.url);
+    }
+    for (const page of crawledPages) {
+      const t = page.title?.trim().toLowerCase();
+      if (!t) continue;
+      const dupes = titleMap.get(t)!;
+      if (dupes.length > 1) {
+        const others = dupes.filter(u => u !== page.url).slice(0, 3).join(', ');
+        postScanIssues.push({
+          scanId: scan.id,
+          pageId: page.id,
+          checkType: 'duplicate_title',
+          passed: false,
+          severity: 'WARNING',
+          details: `Duplicate title tag "${page.title?.substring(0, 60)}" found on ${dupes.length} pages. Also used by: ${others}. Duplicate titles confuse search engines and split ranking signals.`,
+        });
+      }
+    }
+
+    // ── 3. Duplicate Meta Description Detection ───────────────────────────
+    const descMap = new Map<string, string[]>(); // desc → [url, ...]
+    for (const page of crawledPages) {
+      const d = page.metaDesc?.trim().toLowerCase();
+      if (!d || d.length < 20) continue; // skip very short/empty descriptions
+      if (!descMap.has(d)) descMap.set(d, []);
+      descMap.get(d)!.push(page.url);
+    }
+    for (const page of crawledPages) {
+      const d = page.metaDesc?.trim().toLowerCase();
+      if (!d || d.length < 20) continue;
+      const dupes = descMap.get(d)!;
+      if (dupes.length > 1) {
+        const others = dupes.filter(u => u !== page.url).slice(0, 3).join(', ');
+        postScanIssues.push({
+          scanId: scan.id,
+          pageId: page.id,
+          checkType: 'duplicate_meta_description',
+          passed: false,
+          severity: 'WARNING',
+          details: `Duplicate meta description found on ${dupes.length} pages. Also used by: ${others}. Each page should have a unique, descriptive meta description.`,
+        });
+      }
+    }
+
+    if (postScanIssues.length > 0) {
+      await prisma.seoIssue.createMany({ data: postScanIssues });
     }
   }
 

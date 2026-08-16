@@ -17,7 +17,9 @@ export interface SEORule {
 }
 
 export const seoRules: SEORule[] = [
-  // --- SEO CATEGORY ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // SEO CATEGORY
+  // ─────────────────────────────────────────────────────────────────────────
   {
     id: 'title_tag',
     name: 'Title Tag',
@@ -25,10 +27,10 @@ export const seoRules: SEORule[] = [
     evaluate: ($) => {
       const title = $('title').first().text().trim();
       if (!title) return { passed: false, severity: 'ERROR', details: 'Missing title tag. Every page must have a unique title.', weight: 15 };
-      // Google truncates at ~60 chars. Under 10 is too short to be meaningful.
       if (title.length < 10) return { passed: false, severity: 'ERROR', details: `Title "${title}" is too short (${title.length} chars). Minimum recommended is 10.`, weight: 10 };
-      if (title.length > 60) return { passed: false, severity: 'WARNING', details: `Title is ${title.length} chars, which may be truncated by Google. Keep it under 60.`, weight: 10 };
-      return { passed: true, severity: 'INFO', details: `Title is ${title.length} chars — within the optimal 10-60 range.`, weight: 15 };
+      // Google truncates at ~60 chars (pixel-width ~580px). 58 is the safest hard limit.
+      if (title.length > 60) return { passed: false, severity: 'WARNING', details: `Title is ${title.length} chars — may be truncated by Google (keep under 60).`, weight: 10 };
+      return { passed: true, severity: 'INFO', details: `Title is ${title.length} chars — within the optimal 10–60 range.`, weight: 15 };
     }
   },
   {
@@ -38,9 +40,10 @@ export const seoRules: SEORule[] = [
     evaluate: ($) => {
       const description = $('meta[name="description"]').attr('content')?.trim();
       if (!description) return { passed: false, severity: 'ERROR', details: 'Missing meta description. This is used by search engines as the page snippet.', weight: 15 };
-      if (description.length < 50) return { passed: false, severity: 'WARNING', details: `Description is too short (${description.length} chars). Aim for 120-160 characters.`, weight: 10 };
-      if (description.length > 160) return { passed: false, severity: 'WARNING', details: `Description is ${description.length} chars and may be truncated by Google. Keep it under 160.`, weight: 10 };
-      return { passed: true, severity: 'INFO', details: `Meta description is ${description.length} chars — within the optimal 120-160 range.`, weight: 15 };
+      if (description.length < 50) return { passed: false, severity: 'WARNING', details: `Meta description is too short (${description.length} chars). Aim for 120–155 characters.`, weight: 10 };
+      // Google truncates snippets at ~920px width, which corresponds to ~155 characters.
+      if (description.length > 155) return { passed: false, severity: 'WARNING', details: `Meta description is ${description.length} chars — likely to be truncated by Google. Keep it under 155.`, weight: 10 };
+      return { passed: true, severity: 'INFO', details: `Meta description is ${description.length} chars — within the optimal 120–155 range.`, weight: 15 };
     }
   },
   {
@@ -50,14 +53,71 @@ export const seoRules: SEORule[] = [
     evaluate: ($) => {
       const h1s = $('h1');
       if (h1s.length === 0) return { passed: false, severity: 'ERROR', details: 'No H1 heading found. Every page should have exactly one H1.', weight: 10 };
-      if (h1s.length > 1) return { passed: true, severity: 'INFO', details: `Found ${h1s.length} H1 headings. HTML5 allows multiple H1s, but keeping a single main H1 is often recommended for SEO focus.`, weight: 5 };
+      if (h1s.length > 1) return { passed: true, severity: 'INFO', details: `Found ${h1s.length} H1 headings. HTML5 allows multiple H1s, but a single, focused H1 is generally better for SEO.`, weight: 5 };
       const h1Text = h1s.first().text().trim();
-      if (!h1Text) return { passed: false, severity: 'WARNING', details: 'H1 tag found but it is empty. Add meaningful text to your H1.', weight: 5 };
+      if (!h1Text || h1Text.length < 5) return { passed: false, severity: 'WARNING', details: `H1 tag found but the text "${h1Text}" is too short to be meaningful. Add a descriptive heading.`, weight: 5 };
       return { passed: true, severity: 'INFO', details: `Exactly one H1 found: "${h1Text.substring(0, 60)}${h1Text.length > 60 ? '...' : ''}"`, weight: 10 };
     }
   },
+  {
+    id: 'heading_hierarchy',
+    name: 'Heading Hierarchy',
+    category: 'SEO',
+    evaluate: ($) => {
+      // Walk through headings in DOM order and detect skipped levels
+      const headings = $('h1, h2, h3, h4, h5, h6').toArray();
+      if (headings.length === 0) return { passed: true, severity: 'INFO', details: 'No headings found on this page.', weight: 3 };
 
-  // --- TECHNICAL CATEGORY ---
+      const skips: string[] = [];
+      let prevLevel = 0;
+
+      for (const el of headings) {
+        const level = parseInt(el.tagName.replace('h', ''), 10);
+        // A jump of more than 1 level (e.g. H1 → H3) is a hierarchy violation
+        if (prevLevel > 0 && level > prevLevel + 1) {
+          skips.push(`H${prevLevel} → H${level}`);
+        }
+        prevLevel = level;
+      }
+
+      if (skips.length > 0) {
+        return {
+          passed: false,
+          severity: 'WARNING',
+          details: `Heading hierarchy has ${skips.length} skipped level(s): ${skips.slice(0, 3).join(', ')}. Skipping levels (e.g. H1 → H3) disrupts document structure and screen reader navigation.`,
+          weight: 5,
+        };
+      }
+
+      return { passed: true, severity: 'INFO', details: `Heading hierarchy is correct across ${headings.length} heading(s).`, weight: 5 };
+    }
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TECHNICAL CATEGORY
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'https_usage',
+    name: 'HTTPS Security',
+    category: 'Technical',
+    evaluate: ($, pageUrl) => {
+      if (!pageUrl) return { passed: true, severity: 'INFO', details: 'Could not determine page URL to check HTTPS.', weight: 5 };
+      try {
+        const protocol = new URL(pageUrl).protocol;
+        if (protocol !== 'https:') {
+          return {
+            passed: false,
+            severity: 'ERROR',
+            details: `Page is served over HTTP (${protocol}), not HTTPS. Google uses HTTPS as a ranking signal and browsers mark HTTP pages as "Not Secure".`,
+            weight: 10,
+          };
+        }
+        return { passed: true, severity: 'INFO', details: 'Page is served securely over HTTPS.', weight: 10 };
+      } catch {
+        return { passed: true, severity: 'INFO', details: 'Could not parse page URL to verify HTTPS.', weight: 5 };
+      }
+    }
+  },
   {
     id: 'canonical_tag',
     name: 'Canonical Tag',
@@ -88,6 +148,27 @@ export const seoRules: SEORule[] = [
     }
   },
   {
+    id: 'favicon',
+    name: 'Favicon',
+    category: 'Technical',
+    evaluate: ($) => {
+      const favicon =
+        $('link[rel="icon"]').attr('href') ||
+        $('link[rel="shortcut icon"]').attr('href') ||
+        $('link[rel="apple-touch-icon"]').attr('href');
+
+      if (!favicon) {
+        return {
+          passed: false,
+          severity: 'WARNING',
+          details: 'No favicon found. A favicon improves brand recognition in browser tabs, bookmarks, and search results.',
+          weight: 3,
+        };
+      }
+      return { passed: true, severity: 'INFO', details: `Favicon detected: "${favicon.substring(0, 60)}${favicon.length > 60 ? '...' : ''}"`, weight: 3 };
+    }
+  },
+  {
     id: 'schema_markup',
     name: 'Schema Markup',
     category: 'Technical',
@@ -95,7 +176,6 @@ export const seoRules: SEORule[] = [
       const schemas = $('script[type="application/ld+json"]');
       if (schemas.length === 0) return { passed: false, severity: 'WARNING', details: 'No JSON-LD schema markup found. Schema helps Google show rich results (stars, prices, FAQs).', weight: 10 };
 
-      // Validate that each JSON-LD block is parseable and has a @type
       let validCount = 0;
       let invalidCount = 0;
       const types: string[] = [];
@@ -133,7 +213,6 @@ export const seoRules: SEORule[] = [
       const viewport = $('meta[name="viewport"]').attr('content')?.trim();
       if (!viewport) return { passed: false, severity: 'ERROR', details: 'Missing viewport meta tag. Google uses mobile-first indexing — this is critical.', weight: 10 };
 
-      // Verify it includes "width=device-width" (bare existence is not enough)
       if (!viewport.includes('width=device-width')) {
         return {
           passed: false,
@@ -164,7 +243,9 @@ export const seoRules: SEORule[] = [
     }
   },
 
-  // --- SOCIAL CATEGORY ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // SOCIAL CATEGORY
+  // ─────────────────────────────────────────────────────────────────────────
   {
     id: 'open_graph',
     name: 'Open Graph Tags',
@@ -202,29 +283,40 @@ export const seoRules: SEORule[] = [
     category: 'Social',
     evaluate: ($) => {
       const card = $('meta[name="twitter:card"]').attr('content')?.trim();
-      const title = $('meta[name="twitter:title"]').attr('content')?.trim();
-      const image = $('meta[name="twitter:image"]').attr('content')?.trim();
+      const twitterTitle = $('meta[name="twitter:title"]').attr('content')?.trim();
+      const twitterImage = $('meta[name="twitter:image"]').attr('content')?.trim();
 
-      if (!card) return { passed: false, severity: 'WARNING', details: 'Missing twitter:card meta tag. Without it, links shared on Twitter/X show no preview.', weight: 5 };
+      // Twitter/X falls back to og: tags automatically, so check OG as fallback
+      const ogTitle = $('meta[property="og:title"]').attr('content')?.trim();
+      const ogImage = $('meta[property="og:image"]').attr('content')?.trim();
+
+      if (!card) return { passed: false, severity: 'WARNING', details: 'Missing twitter:card meta tag. Without it, links shared on Twitter/X show no rich preview.', weight: 5 };
 
       const validCards = ['summary', 'summary_large_image', 'app', 'player'];
       if (!validCards.includes(card)) {
         return { passed: false, severity: 'WARNING', details: `twitter:card has an invalid value: "${card}". Valid values: ${validCards.join(', ')}.`, weight: 4 };
       }
 
+      // Only flag if BOTH twitter: and og: fallbacks are missing
+      const effectiveTitle = twitterTitle || ogTitle;
+      const effectiveImage = twitterImage || ogImage;
+
       const missing: string[] = [];
-      if (!title) missing.push('twitter:title');
-      if (!image) missing.push('twitter:image');
+      if (!effectiveTitle) missing.push('twitter:title (no og:title fallback either)');
+      if (!effectiveImage) missing.push('twitter:image (no og:image fallback either)');
 
       if (missing.length > 0) {
-        return { passed: false, severity: 'WARNING', details: `twitter:card is set to "${card}" but missing: ${missing.join(', ')}. Note: These can be inherited from og: tags by Twitter.`, weight: 3 };
+        return { passed: false, severity: 'WARNING', details: `twitter:card is "${card}" but no title/image found (checked twitter: and og: tags): ${missing.join(', ')}.`, weight: 3 };
       }
 
-      return { passed: true, severity: 'INFO', details: `Twitter Card configured as "${card}" with title and image.`, weight: 5 };
+      const source = (!twitterTitle && ogTitle) ? ' (using og: tag fallbacks)' : '';
+      return { passed: true, severity: 'INFO', details: `Twitter Card configured as "${card}" with title and image${source}.`, weight: 5 };
     }
   },
 
-  // --- ACCESSIBILITY CATEGORY ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCESSIBILITY CATEGORY
+  // ─────────────────────────────────────────────────────────────────────────
   {
     id: 'html_lang',
     name: 'HTML Language Attribute',
@@ -232,7 +324,6 @@ export const seoRules: SEORule[] = [
     evaluate: ($) => {
       const lang = $('html').attr('lang')?.trim();
       if (!lang) return { passed: false, severity: 'ERROR', details: 'Missing lang attribute on <html> tag. Required by screen readers and Google for language detection.', weight: 5 };
-      // Basic check: lang should be at least 2 chars (e.g. "en", "fr", "en-US")
       if (lang.length < 2) return { passed: false, severity: 'WARNING', details: `lang attribute "${lang}" appears invalid. Use a standard language code like "en" or "en-US".`, weight: 3 };
       return { passed: true, severity: 'INFO', details: `Language is declared as "${lang}".`, weight: 5 };
     }
@@ -259,12 +350,9 @@ export const seoRules: SEORule[] = [
 
       images.each((_, el) => {
         const alt = $(el).attr('alt');
-        // We flag undefined, null, OR empty string as missing alt text.
-        // For strict SEO monitoring, even decorative images with alt="" are flagged 
-        // to ensure keywords aren't missed.
+        // Flag undefined, null, OR empty string — all are missed SEO opportunities
         if (alt === undefined || alt === null || alt.trim() === '') {
           missingAltCount++;
-          // Collect the image URL for a useful error message
           const url =
             $(el).attr('src') ||
             $(el).attr('data-lazy-src') ||
@@ -273,18 +361,17 @@ export const seoRules: SEORule[] = [
             $(el).attr('data-original') ||
             '';
           if (url && missingUrls.length < 5) {
-            // Trim long URLs for readability in the UI
             missingUrls.push(url.length > 60 ? url.substring(0, 57) + '...' : url);
           }
         }
       });
 
       if (missingAltCount > 0) {
-        const urlList = missingUrls.length > 0 ? ` Affected: ${missingUrls.join(', ')}` : '';
+        const urlList = missingUrls.length > 0 ? ` Affected images: ${missingUrls.join(', ')}` : '';
         return {
           passed: false,
           severity: 'WARNING',
-          details: `${missingAltCount} of ${images.length} image(s) are missing alt text (includes lazy-loaded images).${urlList}`,
+          details: `${missingAltCount} of ${images.length} image(s) are missing alt text.${urlList}`,
           weight: 10,
         };
       }
@@ -302,41 +389,52 @@ export const seoRules: SEORule[] = [
     name: 'Form Input Labels',
     category: 'Accessibility',
     evaluate: ($) => {
-      // Check all meaningful input types
       const inputs = $('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), textarea, select');
       if (inputs.length === 0) return { passed: true, severity: 'INFO', details: 'No form inputs found on this page.', weight: 5 };
 
       let missingLabelCount = 0;
+      let placeholderOnlyCount = 0;
 
       inputs.each((_, el) => {
         const id = $(el).attr('id');
         const ariaLabel = $(el).attr('aria-label');
         const ariaLabelledby = $(el).attr('aria-labelledby');
         const titleAttr = $(el).attr('title');
-        const placeholder = $(el).attr('placeholder'); // Acceptable as a last resort
+        const placeholder = $(el).attr('placeholder');
 
-        // If any accessible label is present, this input is fine
         if (ariaLabel || ariaLabelledby || titleAttr) return;
 
-        // Check for a <label for="id"> association
         if (id) {
           const label = $(`label[for="${id}"]`);
           if (label.length > 0) return;
         }
 
-        // Check if wrapped in a <label>
         const parentLabel = $(el).closest('label');
         if (parentLabel.length > 0) return;
 
-        // Placeholder-only is not ideal but don't penalise if that's all there is —
-        // just count if there's truly nothing at all
-        if (!placeholder) {
+        // Placeholder-only is NOT a proper accessible label — flag it
+        if (placeholder) {
+          placeholderOnlyCount++;
+        } else {
           missingLabelCount++;
         }
       });
 
-      if (missingLabelCount > 0) return { passed: false, severity: 'WARNING', details: `${missingLabelCount} form input(s) have no label, aria-label, or title attribute. Screen readers cannot identify these fields.`, weight: 5 };
-      return { passed: true, severity: 'INFO', details: `All ${inputs.length} form input(s) have accessible labels.`, weight: 5 };
+      if (missingLabelCount > 0) return {
+        passed: false,
+        severity: 'WARNING',
+        details: `${missingLabelCount} input(s) have no label at all. Screen readers cannot identify these fields.${placeholderOnlyCount > 0 ? ` Also, ${placeholderOnlyCount} input(s) rely on placeholder text only — placeholders disappear on focus and are not accessible.` : ''}`,
+        weight: 5,
+      };
+
+      if (placeholderOnlyCount > 0) return {
+        passed: false,
+        severity: 'WARNING',
+        details: `${placeholderOnlyCount} input(s) use placeholder text as their only label. Placeholders disappear when the user starts typing and fail WCAG accessibility standards.`,
+        weight: 3,
+      };
+
+      return { passed: true, severity: 'INFO', details: `All ${inputs.length} form input(s) have proper accessible labels.`, weight: 5 };
     }
   },
   {
@@ -344,7 +442,7 @@ export const seoRules: SEORule[] = [
     name: 'Descriptive Link Text',
     category: 'Accessibility',
     evaluate: ($) => {
-      const links = $('a[href]'); // Only check links that actually go somewhere
+      const links = $('a[href]');
       let emptyCount = 0;
 
       links.each((_, el) => {
@@ -352,18 +450,21 @@ export const seoRules: SEORule[] = [
         const ariaLabel = $(el).attr('aria-label')?.trim();
         const ariaLabelledby = $(el).attr('aria-labelledby')?.trim();
         const title = $(el).attr('title')?.trim();
-
-        // Check if there's an image with an alt attribute inside the link
-        // (common pattern for icon links — these ARE accessible)
         const imgWithAlt = $(el).find('img[alt]:not([alt=""])').length > 0;
-        const svgWithTitle = $(el).find('title').length > 0; // SVG title element
+        const svgWithTitle = $(el).find('title').length > 0;
 
         if (!text && !ariaLabel && !ariaLabelledby && !title && !imgWithAlt && !svgWithTitle) {
           emptyCount++;
         }
       });
 
-      if (emptyCount > 0) return { passed: false, severity: 'WARNING', details: `${emptyCount} link(s) have no accessible text, aria-label, or labelled image. Screen readers will announce these as "link" with no context.`, weight: 5 };
+      if (emptyCount > 0) return {
+        passed: false,
+        severity: 'WARNING',
+        // Cap at top 10 to avoid flooding the report
+        details: `${emptyCount} link(s) have no accessible text, aria-label, or labelled image. Screen readers will announce these as "link" with no context.`,
+        weight: 5,
+      };
       return { passed: true, severity: 'INFO', details: `All ${links.length} link(s) have descriptive text or labels.`, weight: 5 };
     }
   }
