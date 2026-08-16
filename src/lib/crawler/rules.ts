@@ -246,13 +246,10 @@ export const seoRules: SEORule[] = [
       const images = $('img');
 
       if (images.length === 0) {
-        // If ZERO images are found, it might be that images are loaded purely
-        // by JS (unlikely on WordPress, but possible). Return a warning instead
-        // of a false-positive PASS so the user is aware.
         return {
-          passed: false,
-          severity: 'WARNING',
-          details: 'No images detected. If this page has images, they may be rendered purely by JavaScript (e.g. heavy SPA framework).',
+          passed: true,
+          severity: 'INFO',
+          details: 'No standard <img> tags detected on this page. (Background images or CSS images do not require alt text).',
           weight: 5,
         };
       }
