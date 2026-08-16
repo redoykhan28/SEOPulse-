@@ -128,6 +128,17 @@ async function checkLink(
         redirect: 'follow',
       });
       status = res.status;
+      
+      // Fallback to GET if HEAD is rejected by CDNs or unsupported
+      if (status === 403 || status === 405 || status === 401 || status === 404 || status === 500) {
+        const getRes = await fetch(url, {
+          method: 'GET',
+          headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+        status = getRes.status;
+      }
     } finally {
       clearTimeout(timeout);
     }

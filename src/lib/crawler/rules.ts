@@ -50,7 +50,7 @@ export const seoRules: SEORule[] = [
     evaluate: ($) => {
       const h1s = $('h1');
       if (h1s.length === 0) return { passed: false, severity: 'ERROR', details: 'No H1 heading found. Every page should have exactly one H1.', weight: 10 };
-      if (h1s.length > 1) return { passed: false, severity: 'WARNING', details: `Found ${h1s.length} H1 headings. Having multiple H1s dilutes your page's focus. Reduce to one.`, weight: 5 };
+      if (h1s.length > 1) return { passed: true, severity: 'INFO', details: `Found ${h1s.length} H1 headings. HTML5 allows multiple H1s, but keeping a single main H1 is often recommended for SEO focus.`, weight: 5 };
       const h1Text = h1s.first().text().trim();
       if (!h1Text) return { passed: false, severity: 'WARNING', details: 'H1 tag found but it is empty. Add meaningful text to your H1.', weight: 5 };
       return { passed: true, severity: 'INFO', details: `Exactly one H1 found: "${h1Text.substring(0, 60)}${h1Text.length > 60 ? '...' : ''}"`, weight: 10 };
@@ -242,11 +242,8 @@ export const seoRules: SEORule[] = [
     name: 'Image Alt Attributes',
     category: 'Accessibility',
     evaluate: ($) => {
-      // Select ALL image elements — including those using lazy-load attributes
-      // Elementor uses data-lazy-src, WP core uses loading="lazy" + src,
-      // lazysizes/other plugins use data-src, data-original, data-lazy.
-      // We consider an element an "image" if it has ANY of these attributes.
-      const images = $('img, [data-src], [data-lazy-src], [data-lazy], [data-original]');
+      // Select only actual image elements to avoid false positives on divs
+      const images = $('img');
 
       if (images.length === 0) {
         // If ZERO images are found, it might be that images are loaded purely
@@ -265,10 +262,9 @@ export const seoRules: SEORule[] = [
 
       images.each((_, el) => {
         const alt = $(el).attr('alt');
-        // We flag undefined, null, OR empty string as missing alt text.
-        // (While alt="" is technically valid for decorative images, SEOs 
-        // usually want to catch empty alts to ensure they aren't missing keywords)
-        if (alt === undefined || alt === null || alt.trim() === '') {
+        // We flag undefined or null as missing alt text.
+        // (alt="" is valid for decorative images per accessibility standards)
+        if (alt === undefined || alt === null) {
           missingAltCount++;
           // Collect the image URL for a useful error message
           const url =
