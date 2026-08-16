@@ -25,7 +25,7 @@ export const seoRules: SEORule[] = [
     name: 'Title Tag',
     category: 'SEO',
     evaluate: ($) => {
-      const title = $('title').first().text().trim();
+      const title = $('head title').first().text().trim();
       if (!title) return { passed: false, severity: 'ERROR', details: 'Missing title tag. Every page must have a unique title.', weight: 15 };
       if (title.length < 10) return { passed: false, severity: 'ERROR', details: `Title "${title}" is too short (${title.length} chars). Minimum recommended is 10.`, weight: 10 };
       // Google truncates at ~60 chars (pixel-width ~580px). 58 is the safest hard limit.
