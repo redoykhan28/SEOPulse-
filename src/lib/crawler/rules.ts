@@ -429,7 +429,6 @@ export const seoRules: SEORule[] = [
       images.each((_, el) => {
         const alt = $(el).attr('alt');
         if (alt === undefined || alt === null || alt.trim() === '') {
-          missingAltCount++;
           // Collect src from common lazy-loading attributes
           const url =
             $(el).attr('src') ||
@@ -439,6 +438,11 @@ export const seoRules: SEORule[] = [
             $(el).attr('data-original') ||
             $(el).attr('data-srcset')?.split(',')[0]?.trim().split(' ')[0] ||
             '';
+            
+          // Ignore inline base64 images (usually decorative SVGs or tracking pixels)
+          if (url.startsWith('data:')) return;
+
+          missingAltCount++;
           if (url && missingUrls.length < 20) {
             missingUrls.push(url);
           }
