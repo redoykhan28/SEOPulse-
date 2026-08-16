@@ -365,6 +365,61 @@ async function crawlBatch(
 }
 
 // ---------------------------------------------------------------------------
+// Sitemap fetcher — handles both sitemap indexes and regular sitemaps
+// ---------------------------------------------------------------------------
+async function fetchSitemapUrls(
+  baseUrl: string,
+  hostname: string,
+  sitemapUrl?: string,
+  depth: number = 0,
+): Promise<string[]> {
+  if (depth > 3) return []; // Prevent infinite recursion
+  
+  const url = sitemapUrl ?? new URL('/sitemap.xml', baseUrl).href;
+  const BOT_UA = 'SEOPulseBot/3.0 (+https://seopulse.app)';
+
+  let text: string;
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': BOT_UA } });
+    if (!res.ok) return [];
+    text = await res.text();
+  } catch {
+    return [];
+  }
+
+  const pageUrls: string[] = [];
+
+  // Detect if this is a sitemap INDEX (contains <sitemapindex> or <sitemap> tags)
+  const isSitemapIndex = /<sitemapindex/i.test(text);
+
+  if (isSitemapIndex) {
+    // Extract child sitemap URLs from <loc> inside <sitemap> blocks
+    const childSitemapMatches = [...text.matchAll(/<sitemap>[\s\S]*?<loc>(.*?)<\/loc>[\s\S]*?<\/sitemap>/gi)];
+    // Fetch all child sitemaps in parallel
+    const childResults = await Promise.all(
+      childSitemapMatches.map(m => fetchSitemapUrls(baseUrl, hostname, m[1].trim(), depth + 1))
+    );
+    for (const urls of childResults) pageUrls.push(...urls);
+  } else {
+    // Regular sitemap — extract all <loc> page URLs
+    const locMatches = [...text.matchAll(/<loc>(.*?)<\/loc>/gi)];
+    for (const match of locMatches) {
+      const rawUrl = match[1].trim();
+      try {
+        const parsed = new URL(rawUrl);
+        // Only include pages from the same hostname
+        if (parsed.hostname === hostname) {
+          const normalized = normalizeUrl(baseUrl, rawUrl);
+          if (normalized) pageUrls.push(normalized);
+        }
+      } catch { /* skip malformed URLs */ }
+    }
+  }
+
+  return [...new Set(pageUrls)]; // deduplicate
+}
+
+// ---------------------------------------------------------------------------
 // Main stateful chunk processor — used by both manual and cron API routes
 // ---------------------------------------------------------------------------
 export async function processCrawlChunk(
@@ -398,20 +453,13 @@ export async function processCrawlChunk(
   // If this is the very first run, fetch the sitemap to seed the queue
   if (scannedUrls.length === 0) {
     try {
-      const sitemapUrl = new URL('/sitemap.xml', scan.website.url).href;
-      const sitemapRes = await fetch(sitemapUrl, {
-        headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
-      });
-      if (sitemapRes.ok) {
-        const sitemapText = await sitemapRes.text();
-        const locMatches = [...sitemapText.matchAll(/<loc>(.*?)<\/loc>/g)];
-        for (const match of locMatches) {
-          const url = normalizeUrl(scan.website.url, match[1]);
-          if (url && !pendingUrls.includes(url)) {
-            pendingUrls.push(url);
-          }
+      const fetchedPageUrls = await fetchSitemapUrls(scan.website.url, startHostname);
+      for (const url of fetchedPageUrls) {
+        if (!pendingUrls.includes(url)) {
+          pendingUrls.push(url);
         }
       }
+      console.log(`[Crawler] Seeded ${fetchedPageUrls.length} URLs from sitemap for ${scan.website.url}`);
     } catch (e) {
       console.warn(`[Crawler] Failed to parse sitemap for ${scan.website.url}`);
     }
