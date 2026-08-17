@@ -112,28 +112,44 @@ async function checkLink(
   // Return cached result immediately
   if (cache.has(url)) {
     const cached = cache.get(url)!;
-    if (typeof cached === 'number' && cached < 400) return null;
+    // Bot-blocks and auth walls are not broken links — skip them
+    if (typeof cached === 'number' && (cached < 400 || isBotBlock(cached))) return null;
     return { url, status: cached };
+  }
+
+  // Status codes that mean the SERVER is actively blocking us, NOT that the page doesn't exist.
+  // TripAdvisor -> 403, Marriott -> 429, Paywalled sites -> 402, Auth required -> 401
+  // Treat these as "exists but inaccessible" — NOT broken.
+  function isBotBlock(status: number): boolean {
+    return [401, 402, 403, 429].includes(status);
   }
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     let status: number;
     try {
-      const res = await fetch(url, {
+      // Step 1: Fast HEAD request
+      const headRes = await fetch(url, {
         method: 'HEAD',
-        headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
+          'Accept': 'text/html,application/xhtml+xml,*/*',
+        },
         signal: controller.signal,
         redirect: 'follow',
       });
-      status = res.status;
-      
-      // Fallback to GET if HEAD is rejected by CDNs or unsupported
-      if (status === 403 || status === 405 || status === 401 || status === 404 || status === 500) {
+      status = headRes.status;
+
+      // Step 2: If HEAD returns ambiguous/anti-bot code, verify with a real GET
+      // (400 Bad Request, 405 Method Not Allowed, 500 Server Error — all could be HEAD-specific rejections)
+      if (status === 400 || status === 405 || status === 500) {
         const getRes = await fetch(url, {
           method: 'GET',
-          headers: { 'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)' },
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
+            'Accept': 'text/html,application/xhtml+xml,*/*',
+          },
           signal: controller.signal,
           redirect: 'follow',
         });
@@ -142,15 +158,32 @@ async function checkLink(
     } finally {
       clearTimeout(timeout);
     }
+
     cache.set(url, status);
-    return status >= 400 ? { url, status } : null;
+
+    // Only flag genuinely broken links:
+    // 404 = Page Not Found, 410 = Page Permanently Removed
+    // Other 4xx are bot-blocks or auth walls — skip them
+    // 5xx are server errors — skip (page may work fine for real users)
+    if (isBotBlock(status)) return null; // Active bot block — not broken
+    if (status >= 500) return null; // Server errors — not our problem, not a "broken link"
+    if (status === 404 || status === 410) return { url, status }; // Genuinely missing pages
+    if (status >= 400 && status < 500) return { url, status }; // Other 4xx like 408 timeout
+    return null; // 2xx / 3xx — all good
   } catch (err: any) {
     if (err.name === 'AbortError') {
+      // A timeout likely means Cloudflare rate-limiting — don't penalise
       cache.set(url, 'timeout');
-      return { url, status: 'timeout (5s)' };
+      return null; // Don't report timeouts as broken — too many false positives
+    }
+    // ENOTFOUND / ECONNREFUSED = domain doesn't exist = genuinely broken
+    const isNetworkError = err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED';
+    if (isNetworkError) {
+      cache.set(url, 'error');
+      return { url, status: 'DNS failure — domain not found' };
     }
     cache.set(url, 'error');
-    return null; // Network error — don't penalise (could be bot block)
+    return null; // Unknown error — benefit of the doubt, don't flag
   }
 }
 
