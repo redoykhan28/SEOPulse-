@@ -268,8 +268,9 @@ async function crawlBatch(
         const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
         const h1 = $('h1').first().text().trim() || null;
 
-        $('script, style, noscript, svg').remove();
-        const textContent = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
+        const $bodyClone = $('body').clone();
+        $bodyClone.find('script, style, noscript, svg').remove();
+        const textContent = $bodyClone.text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
 
         // --- SEO Rules Evaluation ---
         const issues: CrawledPage['issues'] = [];
