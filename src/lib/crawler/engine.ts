@@ -107,13 +107,15 @@ function normalizeUrl(baseUrl: string, href: string): string | null {
 // ---------------------------------------------------------------------------
 async function checkLink(
   url: string,
-  cache: Map<string, number | 'timeout' | 'error'>,
+  cache: Map<string, number | 'timeout' | 'error' | 'soft404'>,
 ): Promise<{ url: string; status: number | string } | null> {
   // Return cached result immediately
   if (cache.has(url)) {
     const cached = cache.get(url)!;
     // Bot-blocks and auth walls are not broken links — skip them
     if (typeof cached === 'number' && (cached < 400 || isBotBlock(cached))) return null;
+    if (cached === 'soft404') return { url, status: 'soft 404 (page says "not found")' };
+    if (cached === 'timeout' || cached === 'error') return null;
     return { url, status: cached };
   }
 
@@ -124,10 +126,39 @@ async function checkLink(
     return [401, 402, 403, 429].includes(status);
   }
 
+  // Soft 404 keyword patterns — phrases that appear in the page body/title when a CMS
+  // returns 200 OK but is actually showing a "not found" page.
+  const SOFT_404_PATTERNS = [
+    /page\s+not\s+found/i,
+    /404\s*[–—-]\s*(not found|error|page)/i,
+    /this\s+page\s+(doesn['']?t|does\s+not)\s+exist/i,
+    /the\s+page\s+you\s+(requested|were\s+looking\s+for)\s+(could\s+not\s+be\s+found|doesn['']?t\s+exist)/i,
+    /no\s+longer\s+(exists|available)/i,
+    /we\s+couldn['']?t\s+find\s+that\s+page/i,
+    /sorry,\s+we\s+can['']?t\s+find/i,
+    /oops[!,.]?\s+(this\s+page|that\s+page)/i,
+    /content\s+not\s+found/i,
+    /error\s+404/i,
+  ];
+
+  function isSoft404(body: string): boolean {
+    // Only check the first 5KB — the error message is always near the top
+    const sample = body.slice(0, 5120);
+    // Extract just the <title> and <h1> text for more accurate matching
+    const titleMatch = sample.match(/<title[^>]*>(.*?)<\/title>/is);
+    const h1Match = sample.match(/<h1[^>]*>(.*?)<\/h1>/is);
+    const titleText = titleMatch?.[1] || '';
+    const h1Text = h1Match?.[1] || '';
+    const checkText = `${titleText} ${h1Text} ${sample.slice(0, 2000)}`;
+    return SOFT_404_PATTERNS.some(pattern => pattern.test(checkText));
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     let status: number;
+    let getResponse: Response | null = null;
+
     try {
       // Step 1: Fast HEAD request
       const headRes = await fetch(url, {
@@ -144,7 +175,7 @@ async function checkLink(
       // Step 2: If HEAD returns ambiguous/anti-bot code, verify with a real GET
       // (400 Bad Request, 405 Method Not Allowed, 500 Server Error — all could be HEAD-specific rejections)
       if (status === 400 || status === 405 || status === 500) {
-        const getRes = await fetch(url, {
+        const retryRes = await fetch(url, {
           method: 'GET',
           headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
@@ -153,7 +184,36 @@ async function checkLink(
           signal: controller.signal,
           redirect: 'follow',
         });
-        status = getRes.status;
+        status = retryRes.status;
+        // Keep GET response for soft 404 check below
+        if (status >= 200 && status < 300) getResponse = retryRes;
+      }
+
+      // Step 3: Soft 404 detection — only on apparent 200 OK responses
+      // Some CMSes (WordPress, Shopify, HubSpot) return 200 even when page content says "Not Found"
+      if (status >= 200 && status < 300) {
+        // If we don't already have a GET body, fetch it now
+        if (!getResponse) {
+          getResponse = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
+              'Accept': 'text/html,application/xhtml+xml,*/*',
+            },
+            signal: controller.signal,
+            redirect: 'follow',
+          });
+        }
+
+        // Only check HTML responses, skip PDFs, images, JSON, etc.
+        const contentType = getResponse.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          const body = await getResponse.text();
+          if (isSoft404(body)) {
+            cache.set(url, 'soft404');
+            return { url, status: 'soft 404 (page says "not found")' };
+          }
+        }
       }
     } finally {
       clearTimeout(timeout);
@@ -186,6 +246,7 @@ async function checkLink(
     return null; // Unknown error — benefit of the doubt, don't flag
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Smart Fetch with JS Detection and Firecrawl Fallback
@@ -280,7 +341,7 @@ async function crawlBatch(
   websiteUrl: string,
   startHostname: string,
   visited: Set<string>,
-  linkStatusCache: Map<string, number | 'timeout' | 'error'>,
+  linkStatusCache: Map<string, number | 'timeout' | 'error' | 'soft404'>,
 ): Promise<string[]> {
   // Returns a list of newly discovered internal URLs from this batch
   const newlyDiscovered: string[] = [];
@@ -500,7 +561,7 @@ export async function processCrawlChunk(
   }
 
   const visited = new Set<string>(scannedUrls);
-  const linkStatusCache = new Map<string, number | 'timeout' | 'error'>();
+  const linkStatusCache = new Map<string, number | 'timeout' | 'error' | 'soft404'>();
   let pagesCrawledThisChunk = 0;
 
   // Process URLs in parallel batches of `concurrency` until chunk is full
