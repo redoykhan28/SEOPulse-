@@ -145,8 +145,8 @@ async function checkLink(
     // Only check the first 5KB — the error message is always near the top
     const sample = body.slice(0, 5120);
     // Extract just the <title> and <h1> text for more accurate matching
-    const titleMatch = sample.match(/<title[^>]*>(.*?)<\/title>/is);
-    const h1Match = sample.match(/<h1[^>]*>(.*?)<\/h1>/is);
+    const titleMatch = sample.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const h1Match = sample.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
     const titleText = titleMatch?.[1] || '';
     const h1Text = h1Match?.[1] || '';
     const checkText = `${titleText} ${h1Text} ${sample.slice(0, 2000)}`;
