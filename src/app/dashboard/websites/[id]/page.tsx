@@ -180,30 +180,41 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
   const failed = issues.filter(i => !i.passed);
   const passed = issues.filter(i => i.passed);
   const hasFailed = failed.length > 0;
+  const hasError = failed.some(i => i.severity === 'FAILED');
+  const hasWarning = failed.some(i => i.severity === 'WARNING' || !i.severity);
+  const groupStatus = hasError ? 'ERROR' : (hasWarning ? 'WARNING' : 'PASSED');
   const categoryColor = CATEGORY_COLORS[meta.category] || CATEGORY_COLORS["Technical"];
 
   return (
     <div className={cn(
       "border rounded-xl overflow-hidden transition-all",
-      hasFailed
+      groupStatus === 'ERROR'
         ? "border-red-100 dark:border-red-500/20"
-        : "border-gray-100 dark:border-white/10"
+        : groupStatus === 'WARNING'
+          ? "border-yellow-100 dark:border-yellow-500/20"
+          : "border-gray-100 dark:border-white/10"
     )}>
       {/* Accordion Header */}
       <button
         onClick={() => setOpen(o => !o)}
         className={cn(
           "w-full flex items-center gap-3 px-5 py-4 text-left transition-colors cursor-pointer",
-          hasFailed
+          groupStatus === 'ERROR'
             ? "bg-red-50/60 dark:bg-red-500/5 hover:bg-red-50 dark:hover:bg-red-500/10"
-            : "bg-white dark:bg-[#111111] hover:bg-gray-50 dark:hover:bg-white/[0.02]"
+            : groupStatus === 'WARNING'
+              ? "bg-yellow-50/60 dark:bg-yellow-500/5 hover:bg-yellow-50 dark:hover:bg-yellow-500/10"
+              : "bg-white dark:bg-[#111111] hover:bg-gray-50 dark:hover:bg-white/[0.02]"
         )}
       >
         {/* Status Icon */}
         <div className="flex-shrink-0">
-          {hasFailed ? (
+          {groupStatus === 'ERROR' ? (
             <div className="w-8 h-8 rounded-full bg-red-100 dark:bg-red-500/20 flex items-center justify-center">
               <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
+            </div>
+          ) : groupStatus === 'WARNING' ? (
+            <div className="w-8 h-8 rounded-full bg-yellow-100 dark:bg-yellow-500/20 flex items-center justify-center">
+              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
             </div>
           ) : (
             <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center">
@@ -232,8 +243,13 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
 
         {/* Count badge + chevron */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {hasFailed && (
+          {groupStatus === 'ERROR' && (
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400">
+              {failed.length} issue{failed.length !== 1 ? 's' : ''}
+            </span>
+          )}
+          {groupStatus === 'WARNING' && (
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">
               {failed.length} issue{failed.length !== 1 ? 's' : ''}
             </span>
           )}
@@ -248,10 +264,15 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
       {open && (
         <div className="divide-y divide-gray-50 dark:divide-white/5 bg-white dark:bg-[#0d0d0d]">
           {/* Failed pages first */}
-          {failed.map(issue => (
-            <div key={issue.id} className="px-5 py-3 flex items-start gap-3 bg-red-50/30 dark:bg-red-500/5">
-              <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 flex-shrink-0" />
-              <div className="flex-1 min-w-0">
+          {failed.map(issue => {
+            const isError = issue.severity === 'FAILED';
+            return (
+              <div key={issue.id} className={cn(
+                "px-5 py-3 flex items-start gap-3",
+                isError ? "bg-red-50/30 dark:bg-red-500/5" : "bg-yellow-50/30 dark:bg-yellow-500/5"
+              )}>
+                <AlertTriangle className={cn("h-3.5 w-3.5 mt-0.5 flex-shrink-0", isError ? "text-red-500" : "text-yellow-500")} />
+                <div className="flex-1 min-w-0">
                 {issue.page?.url && (
                   <a
                     href={issue.page.url}
@@ -292,7 +313,8 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
                 {issue.severity === 'FAILED' ? 'Error' : 'Warning'}
               </span>
             </div>
-          ))}
+          );
+          })}
 
           {/* Passed pages */}
           {passed.map(issue => (
