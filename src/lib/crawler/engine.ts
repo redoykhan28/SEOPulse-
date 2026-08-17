@@ -112,11 +112,17 @@ async function checkLink(
   // Return cached result immediately
   if (cache.has(url)) {
     const cached = cache.get(url)!;
-    // Bot-blocks and auth walls are not broken links — skip them
-    if (typeof cached === 'number' && (cached < 400 || isBotBlock(cached))) return null;
     if (cached === 'soft404') return { url, status: 'soft 404 (page says "not found")' };
     if (cached === 'timeout' || cached === 'error') return null;
-    return { url, status: cached };
+    
+    if (typeof cached === 'number') {
+      // Mirror the exact same logic as below
+      if (isBotBlock(cached)) return null;
+      if (cached >= 500) return null;
+      if (cached === 404 || cached === 410) return { url, status: cached };
+      if (cached >= 400 && cached < 500) return { url, status: cached };
+      return null;
+    }
   }
 
   // Status codes that mean the SERVER is actively blocking us, NOT that the page doesn't exist.
