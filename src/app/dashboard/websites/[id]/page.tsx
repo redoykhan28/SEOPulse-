@@ -264,7 +264,50 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
       {open && (
         <div className="divide-y divide-gray-50 dark:divide-white/5 bg-white dark:bg-[#0d0d0d]">
           {/* Failed pages first */}
-          {failed.map(issue => {
+          {checkType === 'broken_links' && failed.length > 0 ? (() => {
+            const brokenLinkMap = new Map<string, { status: string, pages: any[] }>();
+            failed.forEach(issue => {
+              const parts = issue.details.split('found: ');
+              if (parts.length > 1) {
+                const cleanStr = parts[1].split(' …and')[0];
+                const links = cleanStr.split(', ');
+                links.forEach(l => {
+                  const match = l.match(/(.+?) \((.+?)\)/);
+                  if (match) {
+                    const [, url, status] = match;
+                    if (!brokenLinkMap.has(url)) {
+                      brokenLinkMap.set(url, { status, pages: [] });
+                    }
+                    brokenLinkMap.get(url)!.pages.push(issue.page);
+                  }
+                });
+              }
+            });
+
+            return Array.from(brokenLinkMap.entries()).map(([url, data], idx) => (
+              <div key={idx} className="px-5 py-4 flex items-start gap-3 bg-red-50/30 dark:bg-red-500/5">
+                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" />
+                <div className="flex-1 min-w-0">
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm font-semibold text-red-600 dark:text-red-400 hover:underline break-all block mb-1 cursor-pointer"
+                  >
+                    {url}
+                  </a>
+                  <div className="flex items-center gap-3">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400">
+                      Status: {data.status}
+                    </span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Found on <strong>{data.pages.length}</strong> page(s)
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ));
+          })() : failed.map(issue => {
             const isError = issue.severity === 'FAILED';
             return (
               <div key={issue.id} className={cn(
