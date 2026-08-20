@@ -168,6 +168,63 @@ function CrawledPagesModal({ pages, onClose }: { pages: CrawledPage[]; onClose: 
     </div>
   );
 }
+// ─── Broken Link Row Component ────────────────────────────────────────────────
+function BrokenLinkRow({ url, data }: { url: string, data: { status: string, pages: any[] } }) {
+  const [open, setOpen] = useState(false);
+  const isSiteWide = data.pages.length >= 10;
+  const displayPages = data.pages.slice(0, 10);
+  const remaining = data.pages.length - 10;
+
+  return (
+    <div className="px-5 py-4 border-b border-gray-50 dark:border-white/5 bg-red-50/10 dark:bg-red-500/5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <a href={url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-red-600 dark:text-red-400 hover:underline break-all">
+              {url}
+            </a>
+            {isSiteWide && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400 border border-red-200 dark:border-red-500/30">
+                Site-Wide Link
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-gray-300">
+              Status: {data.status}
+            </span>
+            <button 
+              onClick={() => setOpen(!open)}
+              className="text-xs font-medium text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 transition-colors"
+            >
+              Found on <strong>{data.pages.length}</strong> page(s)
+              {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </button>
+          </div>
+          
+          {open && (
+            <div className="mt-3 pl-3 border-l-2 border-red-200 dark:border-red-500/30 space-y-2">
+              {displayPages.map((page, idx) => (
+                <div key={idx} className="text-xs">
+                  <a href={page.url} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline truncate block">
+                    {page.title || page.url}
+                  </a>
+                  <p className="text-gray-500 dark:text-gray-500 truncate">{page.url}</p>
+                </div>
+              ))}
+              {remaining > 0 && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 italic mt-2 pt-1 border-t border-gray-100 dark:border-white/5">
+                  ...and {remaining} more pages. (Likely located in a header, footer, or sidebar)
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Accordion Issue Group ────────────────────────────────────────────────────
 function IssueAccordion({ checkType, issues, defaultOpen = false }: {
@@ -184,6 +241,23 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
   const hasWarning = failed.some(i => i.severity === 'WARNING' || !i.severity);
   const groupStatus = hasError ? 'ERROR' : (hasWarning ? 'WARNING' : 'PASSED');
   const categoryColor = CATEGORY_COLORS[meta.category] || CATEGORY_COLORS["Technical"];
+
+  // Pre-compute unique broken links for better reporting
+  let uniqueBrokenLinksCount = 0;
+  if (checkType === 'broken_links' && hasFailed) {
+    const uniqueLinks = new Set<string>();
+    failed.forEach(issue => {
+      const parts = issue.details.split('found: ');
+      if (parts.length > 1) {
+        const cleanStr = parts[1].split(' …and')[0];
+        cleanStr.split(', ').forEach(l => {
+          const match = l.match(/(.+?) \((.+?)\)/);
+          if (match) uniqueLinks.add(match[1]);
+        });
+      }
+    });
+    uniqueBrokenLinksCount = uniqueLinks.size;
+  }
 
   return (
     <div className={cn(
@@ -235,7 +309,9 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {hasFailed
-              ? `${failed.length} page${failed.length !== 1 ? 's' : ''} with issues${passed.length > 0 ? ` · ${passed.length} passed` : ''}`
+              ? checkType === 'broken_links'
+                ? `${uniqueBrokenLinksCount} unique broken link${uniqueBrokenLinksCount !== 1 ? 's' : ''} found across ${failed.length} page${failed.length !== 1 ? 's' : ''}`
+                : `${failed.length} page${failed.length !== 1 ? 's' : ''} with issues${passed.length > 0 ? ` · ${passed.length} passed` : ''}`
               : `All ${passed.length} page${passed.length !== 1 ? 's' : ''} passed`
             }
           </p>
@@ -245,12 +321,18 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
         <div className="flex items-center gap-2 flex-shrink-0">
           {groupStatus === 'ERROR' && (
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400">
-              {failed.length} issue{failed.length !== 1 ? 's' : ''}
+              {checkType === 'broken_links' 
+                ? `${uniqueBrokenLinksCount} link${uniqueBrokenLinksCount !== 1 ? 's' : ''}`
+                : `${failed.length} issue${failed.length !== 1 ? 's' : ''}`
+              }
             </span>
           )}
           {groupStatus === 'WARNING' && (
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">
-              {failed.length} issue{failed.length !== 1 ? 's' : ''}
+              {checkType === 'broken_links' 
+                ? `${uniqueBrokenLinksCount} link${uniqueBrokenLinksCount !== 1 ? 's' : ''}`
+                : `${failed.length} issue${failed.length !== 1 ? 's' : ''}`
+              }
             </span>
           )}
           {open
@@ -285,27 +367,7 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
             });
 
             return Array.from(brokenLinkMap.entries()).map(([url, data], idx) => (
-              <div key={idx} className="px-5 py-4 flex items-start gap-3 bg-red-50/30 dark:bg-red-500/5">
-                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" />
-                <div className="flex-1 min-w-0">
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm font-semibold text-red-600 dark:text-red-400 hover:underline break-all block mb-1 cursor-pointer"
-                  >
-                    {url}
-                  </a>
-                  <div className="flex items-center gap-3">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400">
-                      Status: {data.status}
-                    </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      Found on <strong>{data.pages.length}</strong> page(s)
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <BrokenLinkRow key={idx} url={url} data={data} />
             ));
           })() : failed.map(issue => {
             const isError = issue.severity === 'FAILED';
