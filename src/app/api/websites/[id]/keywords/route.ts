@@ -19,6 +19,11 @@ type PageContent = {
   textContent: string | null;
 };
 
+// ─── Helper: Escape Regex ────────────────────────────────────────────────────
+function escapeRegExp(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ─── No-AI: Word-match keyword against page content ─────────────────────────
 function matchKeywordToPages(keyword: string, pages: PageContent[]): {
   status: "targeted" | "partially targeted" | "not targeted";
@@ -29,6 +34,10 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
   let bestPage: string | null = null;
   let bestScore = 0;
 
+  const kwRegex = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i');
+  const kwHyphen = kw.replace(/\s+/g, "-");
+  const kwUnderscore = kw.replace(/\s+/g, "_");
+
   for (const page of pages) {
     const haystack = [
       page.url.toLowerCase(),
@@ -38,19 +47,19 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
       (page.textContent || "").toLowerCase(),
     ].join(" ");
 
-    // Exact match in title/h1/URL = "targeted"
+    // Exact match in title/h1 using word boundaries, or URL substring
     const isExact =
-      page.title?.toLowerCase().includes(kw) ||
-      page.h1?.toLowerCase().includes(kw) ||
-      page.url.toLowerCase().includes(kw.replace(/\s+/g, "-")) ||
-      page.url.toLowerCase().includes(kw.replace(/\s+/g, "_"));
+      kwRegex.test(page.title || "") ||
+      kwRegex.test(page.h1 || "") ||
+      page.url.toLowerCase().includes(kwHyphen) ||
+      page.url.toLowerCase().includes(kwUnderscore);
 
     if (isExact) {
       return { status: "targeted", suggestedPage: page.url };
     }
 
-    // Partial match: count how many words of the keyword appear in content
-    const wordMatches = kwWords.filter(w => haystack.includes(w)).length;
+    // Partial match: count how many words of the keyword appear in content using word boundaries
+    const wordMatches = kwWords.filter(w => new RegExp(`\\b${escapeRegExp(w)}\\b`, 'i').test(haystack)).length;
     const score = wordMatches / kwWords.length;
 
     if (score > bestScore) {
@@ -125,6 +134,23 @@ export async function POST(
       return NextResponse.json({ error: "No keywords provided" }, { status: 400 });
     }
 
+    // Deduplicate keywords (keep highest volume/difficulty)
+    const uniqueKeywords = new Map<string, KeywordRow>();
+    for (const kw of keywords) {
+      const key = kw.keyword.toLowerCase().trim();
+      if (!uniqueKeywords.has(key)) {
+        uniqueKeywords.set(key, kw);
+      } else {
+        const existing = uniqueKeywords.get(key)!;
+        if ((kw.volume || 0) > (existing.volume || 0)) {
+          uniqueKeywords.set(key, kw);
+        } else if (kw.volume === existing.volume && (kw.difficulty || 0) > (existing.difficulty || 0)) {
+          uniqueKeywords.set(key, kw);
+        }
+      }
+    }
+    const dedupedKeywords = Array.from(uniqueKeywords.values());
+
     // Fetch crawled pages for this website
     const pages = await prisma.page.findMany({
       where: { websiteId },
@@ -144,7 +170,7 @@ export async function POST(
     }[] = [];
 
     // ── No-AI (string matching) ──────────────────────────────────────────────
-    for (const kw of keywords) {
+    for (const kw of dedupedKeywords) {
       const { status, suggestedPage } = matchKeywordToPages(kw.keyword, pages);
       matches.push({
         keyword: kw.keyword,
@@ -215,7 +241,7 @@ Return ONLY a valid JSON array of objects with keys: keyword, status, page. No e
               // Merge AI results back
               for (const aiMatch of aiMatches) {
                 const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
-                if (existing && existing.matchStatus === "not targeted" && aiMatch.status === "targeted") {
+                if (existing && existing.matchStatus !== "targeted" && aiMatch.status === "targeted") {
                   existing.matchStatus = "targeted (AI)";
                   existing.suggestedPage = aiMatch.page;
                 }

@@ -6,7 +6,7 @@ import Papa from "papaparse";
 import {
   ArrowLeft, Upload, Loader2, AlertTriangle, CheckCircle2,
   TrendingUp, MinusCircle, XCircle, Sparkles, FileText,
-  Target, BarChart2
+  Target, BarChart2, Download, ArrowUpDown
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +69,8 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
   const [error, setError] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<"keyword" | "volume" | "difficulty" | "status">("volume");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -140,7 +142,37 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
     const statusMatch = filterStatus === "all" || m.matchStatus.toLowerCase() === filterStatus;
     const searchMatch = !searchQuery || m.keyword.toLowerCase().includes(searchQuery.toLowerCase());
     return statusMatch && searchMatch;
+  }).sort((a, b) => {
+    let cmp = 0;
+    if (sortField === "keyword") cmp = a.keyword.localeCompare(b.keyword);
+    else if (sortField === "volume") cmp = (a.volume || 0) - (b.volume || 0);
+    else if (sortField === "difficulty") cmp = (a.difficulty || 0) - (b.difficulty || 0);
+    else if (sortField === "status") cmp = a.matchStatus.localeCompare(b.matchStatus);
+    
+    return sortDir === "asc" ? cmp : -cmp;
   }) || [];
+
+  const handleSort = (field: typeof sortField) => {
+    if (sortField === field) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDir("desc"); }
+  };
+
+  const exportToCsv = () => {
+    if (!keywordFile) return;
+    const headers = ["Keyword", "Volume", "Difficulty", "Status", "Suggested Page"];
+    const csvRows = keywordFile.matches.map(m => [
+      m.keyword, m.volume || "", m.difficulty || "", m.matchStatus, m.suggestedPage || ""
+    ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","));
+    
+    const csvString = [headers.join(","), ...csvRows].join("\n");
+    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `gap-analysis-${keywordFile.filename}`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const stats = {
     total: keywordFile?.matches.length || 0,
@@ -148,6 +180,8 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
     partial: keywordFile?.matches.filter(m => m.matchStatus === "partially targeted").length || 0,
     gaps: keywordFile?.matches.filter(m => m.matchStatus === "not targeted").length || 0,
   };
+
+  const coveragePct = stats.total > 0 ? Math.round((stats.targeted / stats.total) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -163,11 +197,38 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
           </div>
         </div>
         {keywordFile && (
-          <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-white/20 transition-colors text-gray-700 dark:text-white">
-            <Upload className="h-4 w-4" /> Re-upload
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={exportToCsv} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-white/20 transition-colors text-gray-700 dark:text-white">
+              <Download className="h-4 w-4" /> Export CSV
+            </button>
+            <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+              <Upload className="h-4 w-4" /> New Upload
+            </button>
+          </div>
         )}
       </div>
+
+      {/* Coverage Score */}
+      {keywordFile && (
+        <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <Target className="h-4 w-4 text-indigo-500" /> Keyword Coverage Score
+            </h3>
+            <span className="font-bold text-indigo-600 dark:text-indigo-400">{coveragePct}%</span>
+          </div>
+          <div className="w-full bg-gray-100 dark:bg-white/5 rounded-full h-2.5 overflow-hidden flex">
+            <div className="bg-emerald-500 h-2.5 transition-all duration-1000" style={{ width: `${coveragePct}%` }}></div>
+            <div className="bg-yellow-400 h-2.5 transition-all duration-1000" style={{ width: `${stats.total > 0 ? (stats.partial / stats.total) * 100 : 0}%` }}></div>
+            <div className="bg-red-500 h-2.5 transition-all duration-1000 flex-1"></div>
+          </div>
+          <div className="flex items-center gap-4 mt-3 text-xs font-medium text-gray-500 dark:text-gray-400">
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Targeted</div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-yellow-400"></div>Partial Match</div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"></div>Content Gaps</div>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       {keywordFile && (
@@ -271,10 +332,18 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-white/5 bg-gray-50 dark:bg-white/[0.02]">
-                  <th className="text-left px-6 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Keyword</th>
-                  <th className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Volume</th>
-                  <th className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Difficulty</th>
-                  <th className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</th>
+                  <th onClick={() => handleSort("keyword")} className="text-left px-6 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-white/5 transition-colors group">
+                    <div className="flex items-center gap-1">Keyword <ArrowUpDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" /></div>
+                  </th>
+                  <th onClick={() => handleSort("volume")} className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-white/5 transition-colors group">
+                    <div className="flex items-center gap-1">Volume <ArrowUpDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" /></div>
+                  </th>
+                  <th onClick={() => handleSort("difficulty")} className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-white/5 transition-colors group">
+                    <div className="flex items-center gap-1">Difficulty <ArrowUpDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" /></div>
+                  </th>
+                  <th onClick={() => handleSort("status")} className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-white/5 transition-colors group">
+                    <div className="flex items-center gap-1">Status <ArrowUpDown className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" /></div>
+                  </th>
                   <th className="text-left px-4 py-3 font-semibold text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Best Page</th>
                 </tr>
               </thead>
