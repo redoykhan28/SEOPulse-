@@ -3,7 +3,7 @@ import { createClient } from "@/utils/supabase/server";
 import { prisma } from "@/lib/prisma";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct:free";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/auto";
 
 type KeywordRow = {
   keyword: string;
@@ -228,6 +228,7 @@ Return ONLY a valid JSON array of objects with keys: keyword, status, page. No e
               "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
               "Content-Type": "application/json",
               "X-Title": "SEOPulse Keyword Analysis",
+              "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "https://seopulse.app",
             },
             body: JSON.stringify({
               model: OPENROUTER_MODEL,
@@ -249,9 +250,14 @@ Return ONLY a valid JSON array of objects with keys: keyword, status, page. No e
               // Merge AI results back
               for (const aiMatch of aiMatches) {
                 const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
-                if (existing && existing.matchStatus !== "targeted" && existing.matchStatus !== "cannibalized" && aiMatch.status === "targeted") {
-                  existing.matchStatus = "targeted (AI)";
-                  existing.suggestedPage = aiMatch.page;
+                if (existing && existing.matchStatus !== "targeted" && existing.matchStatus !== "cannibalized") {
+                  if (aiMatch.status === "targeted") {
+                    existing.matchStatus = "targeted (AI)";
+                    existing.suggestedPage = aiMatch.page;
+                  } else if (aiMatch.status === "not targeted") {
+                    existing.matchStatus = "not targeted";
+                    existing.suggestedPage = null;
+                  }
                 }
               }
             } catch (e) {
