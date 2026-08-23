@@ -6,9 +6,11 @@ import Papa from "papaparse";
 import {
   ArrowLeft, Upload, Loader2, AlertTriangle, CheckCircle2,
   TrendingUp, MinusCircle, XCircle, Sparkles, FileText,
-  Target, BarChart2, Download, ArrowUpDown
+  Target, BarChart2, Download, ArrowUpDown, Network
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type KeywordMatch = {
   id: string;
@@ -51,6 +53,12 @@ const STATUS_CONFIG = {
     className: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10",
     badgeClass: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400",
   },
+  "cannibalized": {
+    label: "Cannibalized",
+    icon: AlertTriangle,
+    className: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10",
+    badgeClass: "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400",
+  },
 };
 
 function getDifficultyLabel(d: number | null) {
@@ -71,6 +79,18 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<"keyword" | "volume" | "difficulty" | "status">("volume");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  
+  // Brief State
+  const [selectedBriefKeyword, setSelectedBriefKeyword] = useState<string | null>(null);
+  const [briefContent, setBriefContent] = useState<string>("");
+  const [isGeneratingBrief, setIsGeneratingBrief] = useState(false);
+  
+  // Cluster State
+  type KeywordCluster = { topic: string; keywords: string[] };
+  const [clusters, setClusters] = useState<KeywordCluster[] | null>(null);
+  const [isClustering, setIsClustering] = useState(false);
+  const [showClusterModal, setShowClusterModal] = useState(false);
+  
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -174,11 +194,67 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
     URL.revokeObjectURL(url);
   };
 
+  const handleGenerateBrief = async (keyword: string) => {
+    setSelectedBriefKeyword(keyword);
+    setIsGeneratingBrief(true);
+    setBriefContent("");
+    
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/keywords/brief`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to generate brief");
+      setBriefContent(data.brief);
+    } catch (e: any) {
+      setBriefContent(`**Error:** ${e.message}`);
+    } finally {
+      setIsGeneratingBrief(false);
+    }
+  };
+
+  const handleClusterKeywords = async () => {
+    if (!keywordFile) return;
+    setIsClustering(true);
+    setShowClusterModal(true);
+    setError("");
+
+    const gapKeywords = keywordFile.matches
+      .filter(m => m.matchStatus === "not targeted")
+      .map(m => m.keyword);
+
+    if (gapKeywords.length === 0) {
+      setError("No gap keywords to cluster.");
+      setIsClustering(false);
+      setShowClusterModal(false);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/keywords/cluster`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywords: gapKeywords })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to cluster keywords");
+      setClusters(data.clusters);
+    } catch (e: any) {
+      setError(e.message);
+      setShowClusterModal(false);
+    } finally {
+      setIsClustering(false);
+    }
+  };
+
   const stats = {
     total: keywordFile?.matches.length || 0,
     targeted: keywordFile?.matches.filter(m => m.matchStatus.toLowerCase().startsWith("targeted")).length || 0,
     partial: keywordFile?.matches.filter(m => m.matchStatus === "partially targeted").length || 0,
     gaps: keywordFile?.matches.filter(m => m.matchStatus === "not targeted").length || 0,
+    cannibalized: keywordFile?.matches.filter(m => m.matchStatus === "cannibalized").length || 0,
   };
 
   const coveragePct = stats.total > 0 ? Math.round((stats.targeted / stats.total) * 100) : 0;
@@ -198,6 +274,9 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
         </div>
         {keywordFile && (
           <div className="flex items-center gap-3">
+            <button onClick={handleClusterKeywords} className="flex items-center gap-2 px-4 py-2 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/30 text-sm font-medium rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-700 dark:text-indigo-400">
+              <Network className="h-4 w-4" /> AI Clusters
+            </button>
             <button onClick={exportToCsv} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-white/20 transition-colors text-gray-700 dark:text-white">
               <Download className="h-4 w-4" /> Export CSV
             </button>
@@ -232,12 +311,13 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
 
       {/* Stats */}
       {keywordFile && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           {[
-            { label: "Total Keywords", value: stats.total, icon: BarChart2, cls: "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10" },
+            { label: "Total", value: stats.total, icon: BarChart2, cls: "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10" },
             { label: "Targeted", value: stats.targeted, icon: CheckCircle2, cls: "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10" },
-            { label: "Partial Match", value: stats.partial, icon: MinusCircle, cls: "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-500/10" },
-            { label: "Content Gaps", value: stats.gaps, icon: TrendingUp, cls: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10" },
+            { label: "Partial", value: stats.partial, icon: MinusCircle, cls: "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-500/10" },
+            { label: "Gaps", value: stats.gaps, icon: TrendingUp, cls: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10" },
+            { label: "Cannibalized", value: stats.cannibalized, icon: AlertTriangle, cls: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10" },
           ].map(s => (
             <div key={s.label} className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-xl p-5 flex items-center gap-4">
               <div className={cn("p-3 rounded-xl", s.cls.split(' ').slice(1).join(' '))}><s.icon className={cn("h-5 w-5", s.cls.split(' ')[0])} /></div>
@@ -247,6 +327,87 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
               </div>
             </div>
           ))}
+        </div>
+      )}
+      
+      {/* Brief Modal */}
+      {selectedBriefKeyword && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between bg-gray-50 dark:bg-white/[0.02]">
+              <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-500" /> Content Brief: {selectedBriefKeyword}
+              </h3>
+              <div className="flex items-center gap-2">
+                {briefContent && !isGeneratingBrief && (
+                  <button 
+                    onClick={() => navigator.clipboard.writeText(briefContent)} 
+                    className="px-3 py-1.5 text-xs font-medium bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 hover:bg-gray-50 dark:hover:bg-white/20 rounded-md transition-colors"
+                  >
+                    Copy
+                  </button>
+                )}
+                <button onClick={() => setSelectedBriefKeyword(null)} className="p-1.5 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-md transition-colors">
+                  <XCircle className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+              {isGeneratingBrief ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="h-8 w-8 animate-spin mb-4 text-indigo-500" />
+                  <p>AI is generating a comprehensive content brief...</p>
+                </div>
+              ) : (
+                <div className="prose prose-sm dark:prose-invert max-w-none prose-indigo prose-headings:font-bold prose-a:text-indigo-500 hover:prose-a:text-indigo-600">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{briefContent}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cluster Modal */}
+      {showClusterModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#111111] border border-gray-200 dark:border-white/10 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+            <div className="p-4 border-b border-gray-100 dark:border-white/5 flex items-center justify-between bg-gray-50 dark:bg-white/[0.02]">
+              <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <Network className="h-5 w-5 text-indigo-500" /> AI Keyword Clusters
+              </h3>
+              <button onClick={() => setShowClusterModal(false)} className="p-1.5 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-md transition-colors">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+              {isClustering ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="h-8 w-8 animate-spin mb-4 text-indigo-500" />
+                  <p>AI is analyzing and clustering your content gaps...</p>
+                </div>
+              ) : clusters ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {clusters.map((cluster, idx) => (
+                    <div key={idx} className="bg-gray-50 dark:bg-white/[0.02] border border-gray-200 dark:border-white/10 rounded-xl p-4">
+                      <h4 className="font-bold text-indigo-600 dark:text-indigo-400 mb-3 flex items-center gap-2">
+                        <Target className="h-4 w-4" /> {cluster.topic}
+                      </h4>
+                      <ul className="space-y-2">
+                        {cluster.keywords.map((kw, i) => (
+                          <li key={i} className="text-sm text-gray-700 dark:text-gray-300 flex items-start gap-2">
+                            <span className="text-indigo-400 mt-1 text-[10px]">●</span> {kw}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 text-center py-8">Failed to generate clusters.</p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -323,6 +484,7 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
                 <option value="all">All Status</option>
                 <option value="targeted">Targeted</option>
                 <option value="partially targeted">Partial</option>
+                <option value="cannibalized">Cannibalized</option>
                 <option value="not targeted">Gaps Only</option>
               </select>
             </div>
@@ -376,13 +538,29 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
                           {statusCfg.label}
                         </span>
                       </td>
-                      <td className="px-4 py-4 text-gray-500 dark:text-gray-400 max-w-xs truncate text-xs font-mono">
-                        {m.suggestedPage ? (
-                          <a href={m.suggestedPage} target="_blank" rel="noreferrer" className="hover:text-indigo-500 underline underline-offset-2">
+                      <td className="px-4 py-4 text-gray-500 dark:text-gray-400 max-w-xs text-xs font-mono">
+                        {m.matchStatus === "cannibalized" && m.suggestedPage ? (
+                          <div className="flex flex-col gap-1">
+                            {m.suggestedPage.split(",").map((url, idx) => (
+                              <a key={idx} href={url.trim()} target="_blank" rel="noreferrer" className="hover:text-indigo-500 underline underline-offset-2 truncate">
+                                {url.trim()}
+                              </a>
+                            ))}
+                          </div>
+                        ) : m.suggestedPage ? (
+                          <a href={m.suggestedPage} target="_blank" rel="noreferrer" className="hover:text-indigo-500 underline underline-offset-2 truncate block">
                             {m.suggestedPage}
                           </a>
                         ) : (
-                          <span className="text-red-400 font-medium">Create new page →</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-red-400 font-medium truncate">Create new page</span>
+                            <button 
+                              onClick={() => handleGenerateBrief(m.keyword)}
+                              className="px-2 py-1 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-md flex items-center gap-1 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors shrink-0"
+                            >
+                              <Sparkles className="h-3 w-3" /> Brief
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

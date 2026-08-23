@@ -26,7 +26,7 @@ function escapeRegExp(string: string) {
 
 // ─── No-AI: Word-match keyword against page content ─────────────────────────
 function matchKeywordToPages(keyword: string, pages: PageContent[]): {
-  status: "targeted" | "partially targeted" | "not targeted";
+  status: "targeted" | "partially targeted" | "not targeted" | "cannibalized";
   suggestedPage: string | null;
 } {
   const kw = keyword.toLowerCase().trim();
@@ -37,6 +37,8 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
   const kwRegex = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i');
   const kwHyphen = kw.replace(/\s+/g, "-");
   const kwUnderscore = kw.replace(/\s+/g, "_");
+
+  const exactMatches: string[] = [];
 
   for (const page of pages) {
     const haystack = [
@@ -55,7 +57,7 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
       page.url.toLowerCase().includes(kwUnderscore);
 
     if (isExact) {
-      return { status: "targeted", suggestedPage: page.url };
+      exactMatches.push(page.url);
     }
 
     // Partial match: count how many words of the keyword appear in content using word boundaries
@@ -66,6 +68,12 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
       bestScore = score;
       bestPage = page.url;
     }
+  }
+
+  if (exactMatches.length > 1) {
+    return { status: "cannibalized", suggestedPage: exactMatches.join(", ") };
+  } else if (exactMatches.length === 1) {
+    return { status: "targeted", suggestedPage: exactMatches[0] };
   }
 
   if (bestScore >= 0.5) {
@@ -241,7 +249,7 @@ Return ONLY a valid JSON array of objects with keys: keyword, status, page. No e
               // Merge AI results back
               for (const aiMatch of aiMatches) {
                 const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
-                if (existing && existing.matchStatus !== "targeted" && aiMatch.status === "targeted") {
+                if (existing && existing.matchStatus !== "targeted" && existing.matchStatus !== "cannibalized" && aiMatch.status === "targeted") {
                   existing.matchStatus = "targeted (AI)";
                   existing.suggestedPage = aiMatch.page;
                 }
