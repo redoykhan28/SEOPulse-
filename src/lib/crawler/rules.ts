@@ -103,7 +103,7 @@ export const seoRules: SEORule[] = [
         return {
           passed: false,
           severity: 'WARNING',
-          details: `Heading hierarchy has ${skips.length} skipped level(s): ${skips.slice(0, 3).join(', ')}. Skipping levels (e.g. H1 → H3) disrupts document structure and screen reader navigation.`,
+          details: `Heading hierarchy skips levels: ${skips.slice(0, 3).join(', ')}. Skipping levels (e.g. H1 → H3) disrupts document structure and screen reader navigation.`,
           weight: 5,
         };
       }
