@@ -224,37 +224,73 @@ export const seoRules: SEORule[] = [
       if (schemas.length === 0) return { passed: false, severity: 'WARNING', details: 'No JSON-LD schema markup found. Schema helps Google show rich results (stars, prices, FAQs).', weight: 10 };
 
       let validCount = 0;
-      let invalidCount = 0;
-      const types: string[] = [];
+      let malformedCount = 0;
+      let missingTypeCount = 0;
+      const types = new Set<string>();
 
       schemas.each((_, el) => {
         const rawJson = $(el).html()?.trim() || '';
+        // Skip completely empty blocks (e.g. <script type="application/ld+json"></script>)
+        if (!rawJson) return;
+
         try {
           const parsed = JSON.parse(rawJson);
-          // Handle both single @type and @graph arrays
-          const schemaType =
-            parsed['@type'] ||
-            (Array.isArray(parsed['@graph'])
-              ? parsed['@graph'].map((g: any) => g['@type']).filter(Boolean).join(', ')
-              : null);
-          if (schemaType) {
+
+          // Helper to recursively find all @type values
+          const extractTypes = (obj: any) => {
+            if (!obj || typeof obj !== 'object') return;
+            if (obj['@type']) {
+              if (Array.isArray(obj['@type'])) {
+                obj['@type'].forEach((t: any) => types.add(String(t)));
+              } else {
+                types.add(String(obj['@type']));
+              }
+            }
+            if (Array.isArray(obj['@graph'])) {
+              obj['@graph'].forEach((g: any) => extractTypes(g));
+            } else {
+              // Check object values recursively just in case it's nested without @graph
+              Object.values(obj).forEach(val => extractTypes(val));
+            }
+          };
+
+          const sizeBefore = types.size;
+          extractTypes(parsed);
+
+          if (types.size > sizeBefore) {
             validCount++;
-            if (types.length < 3) types.push(String(schemaType));
           } else {
-            invalidCount++;
+            // Only count as "missing type" if it actually contains data (not just {})
+            if (Object.keys(parsed).length > 0) {
+              missingTypeCount++;
+            }
           }
         } catch {
-          invalidCount++;
+          malformedCount++;
         }
       });
 
-      if (invalidCount > 0 && validCount === 0) {
-        return { passed: false, severity: 'WARNING', details: `Found ${schemas.length} JSON-LD block(s) but all contain invalid or unparseable JSON. Fix the schema markup.`, weight: 5 };
+      const typeList = Array.from(types);
+      const displayTypes = typeList.slice(0, 5).join(', ') + (typeList.length > 5 ? ` (+${typeList.length - 5} more)` : '');
+
+      if (malformedCount > 0) {
+        let msg = `${malformedCount} JSON-LD block(s) contain malformed JSON (syntax error).`;
+        if (validCount > 0) msg += ` Found valid schemas: ${displayTypes}.`;
+        return { passed: false, severity: 'ERROR', details: msg, weight: 7 };
       }
-      if (invalidCount > 0) {
-        return { passed: false, severity: 'WARNING', details: `${invalidCount} of ${schemas.length} JSON-LD block(s) contain invalid JSON. Valid types: ${types.join(', ')}.`, weight: 7 };
+
+      if (validCount === 0) {
+        if (missingTypeCount > 0) {
+          return { passed: false, severity: 'WARNING', details: `Found JSON-LD block(s), but they are missing the '@type' property. Valid schema requires a @type.`, weight: 5 };
+        }
+        return { passed: false, severity: 'WARNING', details: 'No valid JSON-LD schema markup found (blocks are empty).', weight: 10 };
       }
-      return { passed: true, severity: 'INFO', details: `Found ${validCount} valid JSON-LD schema(s): ${types.join(', ')}.`, weight: 10 };
+
+      if (missingTypeCount > 0) {
+        return { passed: true, severity: 'INFO', details: `Found valid schema(s) (${displayTypes}), but ${missingTypeCount} block(s) are missing '@type'. (Often caused by plugins).`, weight: 5 };
+      }
+
+      return { passed: true, severity: 'INFO', details: `Found valid JSON-LD schema(s): ${displayTypes}.`, weight: 10 };
     }
   },
   {
