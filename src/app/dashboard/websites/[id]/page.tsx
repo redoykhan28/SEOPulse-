@@ -72,20 +72,23 @@ type WebsiteDetails = {
 
 // ─── Rule metadata map ────────────────────────────────────────────────────────
 const RULE_META: Record<string, { label: string; category: string }> = {
-  title_tag:            { label: "Title Tag",                category: "SEO" },
-  meta_description:     { label: "Meta Description",         category: "SEO" },
-  h1_presence:          { label: "H1 Heading",               category: "SEO" },
-  canonical_tag:        { label: "Canonical Tag",            category: "Technical" },
-  schema_markup:        { label: "Schema Markup",            category: "Technical" },
-  viewport_tag:         { label: "Mobile Viewport",          category: "Technical" },
-  robots_directive:     { label: "Robots Directives",        category: "Technical" },
-  open_graph:           { label: "Open Graph Tags",          category: "Social" },
-  twitter_cards:        { label: "Twitter Cards",            category: "Social" },
-  html_lang:            { label: "HTML Language Attribute",  category: "Accessibility" },
-  image_alt_attributes: { label: "Image Alt Attributes",     category: "Accessibility" },
-  form_labels:          { label: "Form Input Labels",        category: "Accessibility" },
-  empty_links:          { label: "Descriptive Link Text",    category: "Accessibility" },
-  broken_links:         { label: "Broken Links (404s)",      category: "Technical" },
+  title_tag:                 { label: "Title Tag",                  category: "SEO" },
+  meta_description:          { label: "Meta Description",           category: "SEO" },
+  h1_presence:               { label: "H1 Heading",                 category: "SEO" },
+  duplicate_title:           { label: "Duplicate Title Tags",       category: "SEO" },
+  duplicate_meta_description:{ label: "Duplicate Meta Description",  category: "SEO" },
+  canonical_tag:             { label: "Canonical Tag",              category: "Technical" },
+  schema_markup:             { label: "Schema Markup",              category: "Technical" },
+  viewport_tag:              { label: "Mobile Viewport",            category: "Technical" },
+  robots_directive:          { label: "Robots Directives",          category: "Technical" },
+  orphan_page:               { label: "Orphan Pages",               category: "Technical" },
+  open_graph:                { label: "Open Graph Tags",            category: "Social" },
+  twitter_cards:             { label: "Twitter Cards",              category: "Social" },
+  html_lang:                 { label: "HTML Language Attribute",    category: "Accessibility" },
+  image_alt_attributes:      { label: "Image Alt Attributes",       category: "Accessibility" },
+  form_labels:               { label: "Form Input Labels",          category: "Accessibility" },
+  empty_links:               { label: "Descriptive Link Text",      category: "Accessibility" },
+  broken_links:              { label: "Broken Links (404s)",        category: "Technical" },
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -226,6 +229,126 @@ function BrokenLinkRow({ url, data }: { url: string, data: { status: string, pag
   );
 }
 
+// ─── Duplicate Group Row ──────────────────────────────────────────────────────
+type DuplicateGroupData = {
+  sharedWith: number;
+  paginationSkipped: number;
+  descSnippet?: string;
+  titleSnippet?: string;
+  affectedUrls: string[];
+};
+
+function parseDuplicateGroup(details: string): DuplicateGroupData | null {
+  if (!details.startsWith('DUPLICATE_GROUP:')) return null;
+  try { return JSON.parse(details.slice('DUPLICATE_GROUP:'.length)); } catch { return null; }
+}
+
+function DuplicateGroupRow({ issue, checkType }: { issue: SeoIssue; checkType: string }) {
+  const [open, setOpen] = useState(false);
+  const data = parseDuplicateGroup(issue.details);
+
+  // Fallback for old-format details (pre-fix scans)
+  if (!data) {
+    return (
+      <div className="px-5 py-3 flex items-start gap-3 bg-yellow-50/30 dark:bg-yellow-500/5">
+        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-yellow-500" />
+        <div className="flex-1 min-w-0">
+          {issue.page?.url && (
+            <a href={issue.page.url} target="_blank" rel="noreferrer"
+               className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline truncate block mb-0.5 cursor-pointer">
+              {issue.page.title || issue.page.url}
+            </a>
+          )}
+          <p className="text-sm text-gray-700 dark:text-gray-300">{issue.details}</p>
+        </div>
+        <span className="flex-shrink-0 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">Warning</span>
+      </div>
+    );
+  }
+
+  const snippet = checkType === 'duplicate_title' ? data.titleSnippet : data.descSnippet;
+  const displayUrls = data.affectedUrls.slice(0, 10);
+  const remaining = data.affectedUrls.length - 10;
+  const totalAffected = data.sharedWith + 1; // representative + others
+
+  return (
+    <div className="border-b border-gray-50 dark:border-white/5 last:border-0">
+      <div className="px-5 py-4 flex items-start gap-3 bg-yellow-50/10 dark:bg-yellow-500/5">
+        <div className="mt-0.5 flex-shrink-0 w-7 h-7 rounded-full bg-yellow-100 dark:bg-yellow-500/20 flex items-center justify-center">
+          <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400" />
+        </div>
+
+        <div className="flex-1 min-w-0">
+          {/* Representative page link */}
+          {issue.page?.url && (
+            <a href={issue.page.url} target="_blank" rel="noreferrer"
+               className="text-sm font-semibold text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline break-all transition-colors cursor-pointer">
+              {issue.page.title || issue.page.url}
+            </a>
+          )}
+
+          {/* Shared content snippet */}
+          {snippet && (
+            <div className="mt-2 px-3 py-2 bg-white dark:bg-white/5 border border-yellow-200 dark:border-yellow-500/20 rounded-lg">
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 uppercase font-semibold tracking-wide mb-1">
+                {checkType === 'duplicate_title' ? 'Shared Title' : 'Shared Description'}
+              </p>
+              <p className="text-xs text-gray-600 dark:text-gray-300 italic leading-relaxed">
+                &ldquo;{snippet}{snippet.length >= (checkType === 'duplicate_title' ? 80 : 120) ? '\u2026' : ''}&rdquo;
+              </p>
+            </div>
+          )}
+
+          {/* Stats + expand button */}
+          <div className="flex items-center gap-3 mt-2.5 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+              {totalAffected} pages share this {checkType === 'duplicate_title' ? 'title' : 'description'}
+            </span>
+            {data.paginationSkipped > 0 && (
+              <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                +{data.paginationSkipped} pagination variant{data.paginationSkipped !== 1 ? 's' : ''} excluded
+              </span>
+            )}
+            <button
+              onClick={() => setOpen(o => !o)}
+              className="ml-auto text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-yellow-600 dark:hover:text-yellow-400 flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              {open ? 'Hide' : 'Show'} affected pages
+              {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </button>
+          </div>
+
+          {/* Expandable URL list */}
+          {open && (
+            <div className="mt-3 pl-3 border-l-2 border-yellow-200 dark:border-yellow-500/30 space-y-1.5">
+              {/* Representative page first */}
+              {issue.page?.url && (
+                <a href={issue.page.url} target="_blank" rel="noreferrer"
+                   className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline truncate flex items-center gap-1.5 cursor-pointer">
+                  <span className="px-1 py-0 rounded text-[9px] font-bold uppercase bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex-shrink-0">Main</span>
+                  {issue.page.url}
+                </a>
+              )}
+              {displayUrls.map((url, idx) => (
+                <a key={idx} href={url} target="_blank" rel="noreferrer"
+                   className="text-xs text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline truncate block transition-colors cursor-pointer">
+                  {url}
+                </a>
+              ))}
+              {remaining > 0 && (
+                <p className="text-xs text-gray-400 dark:text-gray-500 italic pt-1.5 border-t border-gray-100 dark:border-white/5">
+                  &hellip;and {remaining} more page{remaining !== 1 ? 's' : ''}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Accordion Issue Group ────────────────────────────────────────────────────
 function IssueAccordion({ checkType, issues, defaultOpen = false }: {
   checkType: string;
@@ -311,7 +434,9 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
             {hasFailed
               ? checkType === 'broken_links'
                 ? `${uniqueBrokenLinksCount} unique broken link${uniqueBrokenLinksCount !== 1 ? 's' : ''} found across ${failed.length} page${failed.length !== 1 ? 's' : ''}`
-                : `${failed.length} page${failed.length !== 1 ? 's' : ''} with issues${passed.length > 0 ? ` · ${passed.length} passed` : ''}`
+                : (checkType === 'duplicate_meta_description' || checkType === 'duplicate_title')
+                  ? `${failed.length} duplicate group${failed.length !== 1 ? 's' : ''} found${passed.length > 0 ? ` · ${passed.length} passed` : ''}`
+                  : `${failed.length} page${failed.length !== 1 ? 's' : ''} with issues${passed.length > 0 ? ` · ${passed.length} passed` : ''}`
               : `All ${passed.length} page${passed.length !== 1 ? 's' : ''} passed`
             }
           </p>
@@ -369,7 +494,12 @@ function IssueAccordion({ checkType, issues, defaultOpen = false }: {
             return Array.from(brokenLinkMap.entries()).map(([url, data], idx) => (
               <BrokenLinkRow key={idx} url={url} data={data} />
             ));
-          })() : failed.map(issue => {
+          })()
+          : (checkType === 'duplicate_meta_description' || checkType === 'duplicate_title') && failed.length > 0
+            ? failed.map((issue, idx) => (
+                <DuplicateGroupRow key={idx} issue={issue} checkType={checkType} />
+              ))
+          : failed.map(issue => {
             const isError = issue.severity === 'FAILED';
             return (
               <div key={issue.id} className={cn(

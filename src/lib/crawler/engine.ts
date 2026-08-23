@@ -101,6 +101,36 @@ function normalizeUrl(baseUrl: string, href: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Pagination / derivative URL detector
+// Returns true for URLs that are NOT canonical representatives:
+//   - contain known pagination query params (?paged=2, ?page=3, etc.)
+//   - have path-based pagination  (/page/2, /p/3)
+//   - are date archive URLs       (/2026/09, /2026/09/15)
+//   - are WordPress calendar views (/month, /day, /today, /week)
+// These pages intentionally share content with their canonical and should
+// be excluded from duplicate-content checks.
+// ---------------------------------------------------------------------------
+function isPaginationVariant(url: string): boolean {
+  try {
+    const u = new URL(url);
+    // Query-param based pagination
+    for (const key of u.searchParams.keys()) {
+      if (PAGINATION_PARAMS.has(key.toLowerCase())) return true;
+    }
+    const path = u.pathname;
+    // Path-based pagination: /page/2, /paged/3, /p/4
+    if (/\/(page|paged|p)\/\d+\/?$/i.test(path)) return true;
+    // Date archive URLs: /2026/09, /2026/09/15, /2026-09
+    if (/\/\d{4}[\/\-]\d{2}([\/\-]\d{2})?\/?(\?.*)?(#.*)?$/.test(path)) return true;
+    // WordPress/Events Calendar view URLs: /month, /day, /today, /week
+    if (/\/(month|day|today|week)\/?$/i.test(path)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Broken Link Checker — checks a single URL via HEAD request with 5s timeout.
 // Results are cached in a per-scan Map to avoid redundant network requests.
 // Returns the broken URL + status code, or null if the link is healthy.
@@ -648,55 +678,102 @@ export async function processCrawlChunk(
       }
     }
 
+    // ── Shared pre-filter: exclude noindex pages and pagination variants ───
+    // Noindex pages intentionally hide from search — duplicating their content
+    // is not an SEO problem. Pagination variants (?paged=2, /page/3, etc.) share
+    // content with their canonical by design and should not be flagged.
+    const noindexPageIds = new Set<string>();
+    try {
+      const robotsIssues = await (prisma.seoIssue as any).findMany({
+        where: { scanId: scan.id, checkType: 'robots_directive', passed: false },
+        select: { pageId: true, details: true },
+      });
+      for (const issue of robotsIssues) {
+        if (/noindex/i.test(issue.details)) noindexPageIds.add(issue.pageId);
+      }
+    } catch { /* non-critical — proceed without noindex filtering */ }
+
+    // Pages that are canonical representatives (not pagination variants, not noindex)
+    const canonicalPages = crawledPages.filter(
+      p => !noindexPageIds.has(p.id) && !isPaginationVariant(p.url)
+    );
+
     // ── 2. Duplicate Title Detection ──────────────────────────────────────
-    // Group pages by their normalised title
-    const titleMap = new Map<string, string[]>(); // title → [url, ...]
-    for (const page of crawledPages) {
+    // Group CANONICAL pages by their normalised title — one issue per group
+    const titleMap = new Map<string, typeof crawledPages>();
+    for (const page of canonicalPages) {
       const t = page.title?.trim().toLowerCase();
       if (!t) continue;
       if (!titleMap.has(t)) titleMap.set(t, []);
-      titleMap.get(t)!.push(page.url);
+      titleMap.get(t)!.push(page);
     }
-    for (const page of crawledPages) {
-      const t = page.title?.trim().toLowerCase();
-      if (!t) continue;
-      const dupes = titleMap.get(t)!;
-      if (dupes.length > 1) {
-        const others = dupes.filter(u => u !== page.url).slice(0, 3).join(', ');
-        postScanIssues.push({
-          scanId: scan.id,
-          pageId: page.id,
-          checkType: 'duplicate_title',
-          passed: false,
-          severity: 'WARNING',
-          details: `Duplicate title tag "${page.title?.substring(0, 60)}" found on ${dupes.length} pages. Also used by: ${others}. Duplicate titles confuse search engines and split ranking signals.`,
-        });
-      }
+
+    for (const [, pages] of titleMap.entries()) {
+      if (pages.length <= 1) continue;
+
+      // Count pagination variants sharing this title (informational only)
+      const titleKey = pages[0].title?.trim().toLowerCase() ?? '';
+      const paginationCount = crawledPages.filter(
+        p => p.title?.trim().toLowerCase() === titleKey && isPaginationVariant(p.url)
+      ).length;
+
+      // Pick representative: shortest URL (closest to root/canonical)
+      const sorted = [...pages].sort((a, b) => a.url.length - b.url.length);
+      const representative = sorted[0];
+      const others = sorted.slice(1);
+
+      postScanIssues.push({
+        scanId: scan.id,
+        pageId: representative.id,
+        checkType: 'duplicate_title',
+        passed: false,
+        severity: 'WARNING',
+        details: `DUPLICATE_GROUP:${JSON.stringify({
+          sharedWith: others.length,
+          paginationSkipped: paginationCount,
+          titleSnippet: (representative.title ?? '').substring(0, 80),
+          affectedUrls: others.map(p => p.url),
+        })}`,
+      });
     }
 
     // ── 3. Duplicate Meta Description Detection ───────────────────────────
-    const descMap = new Map<string, string[]>(); // desc → [url, ...]
-    for (const page of crawledPages) {
-      const d = page.metaDesc?.trim().toLowerCase();
-      if (!d || d.length < 20) continue; // skip very short/empty descriptions
-      if (!descMap.has(d)) descMap.set(d, []);
-      descMap.get(d)!.push(page.url);
-    }
-    for (const page of crawledPages) {
+    // Group CANONICAL pages by their normalised description — one issue per group
+    const descMap = new Map<string, typeof crawledPages>();
+    for (const page of canonicalPages) {
       const d = page.metaDesc?.trim().toLowerCase();
       if (!d || d.length < 20) continue;
-      const dupes = descMap.get(d)!;
-      if (dupes.length > 1) {
-        const others = dupes.filter(u => u !== page.url).slice(0, 3).join(', ');
-        postScanIssues.push({
-          scanId: scan.id,
-          pageId: page.id,
-          checkType: 'duplicate_meta_description',
-          passed: false,
-          severity: 'WARNING',
-          details: `Duplicate meta description found on ${dupes.length} pages. Also used by: ${others}. Each page should have a unique, descriptive meta description.`,
-        });
-      }
+      if (!descMap.has(d)) descMap.set(d, []);
+      descMap.get(d)!.push(page);
+    }
+
+    for (const [, pages] of descMap.entries()) {
+      if (pages.length <= 1) continue;
+
+      // Count pagination variants sharing this description (informational only)
+      const descKey = pages[0].metaDesc?.trim().toLowerCase() ?? '';
+      const paginationCount = crawledPages.filter(
+        p => p.metaDesc?.trim().toLowerCase() === descKey && isPaginationVariant(p.url)
+      ).length;
+
+      // Pick representative: shortest URL (closest to root/canonical)
+      const sorted = [...pages].sort((a, b) => a.url.length - b.url.length);
+      const representative = sorted[0];
+      const others = sorted.slice(1);
+
+      postScanIssues.push({
+        scanId: scan.id,
+        pageId: representative.id,
+        checkType: 'duplicate_meta_description',
+        passed: false,
+        severity: 'WARNING',
+        details: `DUPLICATE_GROUP:${JSON.stringify({
+          sharedWith: others.length,
+          paginationSkipped: paginationCount,
+          descSnippet: (representative.metaDesc ?? '').substring(0, 120),
+          affectedUrls: others.map(p => p.url),
+        })}`,
+      });
     }
 
     if (postScanIssues.length > 0) {
