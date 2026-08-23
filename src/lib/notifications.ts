@@ -1,7 +1,20 @@
 import { prisma } from './prisma';
 import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 
+// ─── Providers ───────────────────────────────────────────────────────────────
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+
+// Gmail SMTP transporter (fallback when Resend is in sandbox mode)
+const gmailTransporter = (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
+  ? nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+    })
+  : null;
 
 export type NotificationType =
   | 'broken_links'
@@ -12,7 +25,8 @@ export type NotificationType =
   | 'site_offline'
   | 'minor_seo_change'
   | 'website_added'
-  | 'website_deleted';
+  | 'website_deleted'
+  | 'scan_complete';
 
 interface NotifyOptions {
   userId?: string;
@@ -35,11 +49,12 @@ const TYPE_META: Record<NotificationType, { emoji: string; color: string; label:
   minor_seo_change:    { emoji: '⚡', color: '#6366f1', label: 'SEO Change Detected' },
   website_added:       { emoji: '✅', color: '#10b981', label: 'Website Added' },
   website_deleted:     { emoji: '🗑️',  color: '#6b7280', label: 'Website Removed' },
+  scan_complete:       { emoji: '🔎', color: '#10b981', label: 'Scan Complete' },
 };
 
 function buildEmailHtml(type: NotificationType, message: string): string {
   const meta = TYPE_META[type] || TYPE_META['minor_seo_change'];
-  const dashboardUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/dashboard`;
+  const dashboardUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://seo-pulse-sandy.vercel.app'}/dashboard`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -74,7 +89,7 @@ function buildEmailHtml(type: NotificationType, message: string): string {
         <!-- Footer -->
         <tr><td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 16px 16px;padding:20px 40px;text-align:center;">
           <p style="color:#9ca3af;font-size:12px;margin:0;">
-            You're receiving this because you're a member of a SEOPulse workspace.<br>
+            You're receiving this because you monitor websites with SEOPulse.<br>
             <a href="${dashboardUrl}/settings/notifications" style="color:#6366f1;text-decoration:none;">Manage notification preferences</a>
           </p>
         </td></tr>
@@ -86,9 +101,67 @@ function buildEmailHtml(type: NotificationType, message: string): string {
 </html>`;
 }
 
-// ─── Create an in-app notification ──────────────────────────────────────────
+// ─── Dual-provider email sender ───────────────────────────────────────────────
+// Strategy: Try Resend first (professional from address, great analytics).
+// If Resend fails with a sandbox/validation error (i.e., the recipient isn't the
+// Resend account owner), automatically fall back to Gmail SMTP, which has no
+// such restriction and delivers to any address.
+async function sendEmail(to: string[], subject: string, html: string, type: NotificationType): Promise<void> {
+  const meta = TYPE_META[type] || TYPE_META['minor_seo_change'];
+
+  // ── 1. Try Resend ──────────────────────────────────────────────────────────
+  if (resend) {
+    try {
+      const result = await resend.emails.send({
+        from: 'SEOPulse Alerts <onboarding@resend.dev>',
+        to,
+        subject,
+        html,
+      });
+
+      // Resend returns error object (not exception) for sandbox violations
+      if (!result.error) {
+        console.log(`[Notifications] Email sent via Resend to ${to.join(', ')}`);
+        return; // Success — done
+      }
+
+      // Sandbox restriction (403) → fall through to Gmail
+      const isRestricted =
+        result.error.name === 'validation_error' ||
+        (result.error as any).statusCode === 403;
+
+      if (!isRestricted) {
+        // Non-sandbox error (e.g. invalid API key) — log and fall through
+        console.warn('[Notifications] Resend non-recoverable error:', result.error);
+      } else {
+        console.info('[Notifications] Resend sandbox restriction — falling back to Gmail SMTP');
+      }
+    } catch (e) {
+      console.warn('[Notifications] Resend exception — falling back to Gmail SMTP:', e);
+    }
+  }
+
+  // ── 2. Fall back to Gmail SMTP ─────────────────────────────────────────────
+  if (gmailTransporter) {
+    try {
+      await gmailTransporter.sendMail({
+        from: `SEOPulse Alerts <${process.env.GMAIL_USER}>`,
+        to: to.join(', '),
+        subject,
+        html,
+      });
+      console.log(`[Notifications] Email sent via Gmail SMTP to ${to.join(', ')}`);
+    } catch (e) {
+      console.error('[Notifications] Gmail SMTP also failed:', e);
+    }
+  } else {
+    console.warn('[Notifications] No email provider available. Set RESEND_API_KEY or GMAIL_USER + GMAIL_APP_PASSWORD.');
+  }
+}
+
+// ─── Create an in-app + email + webhook notification ─────────────────────────
 export async function createNotification(opts: NotifyOptions) {
-  // 1. In-app (always)
+  // 1. In-app notification (always saved to DB)
   await prisma.notification.create({
     data: {
       userId: opts.userId,
@@ -98,28 +171,19 @@ export async function createNotification(opts: NotifyOptions) {
     },
   });
 
-  // 2. Email via Resend (if configured)
+  // 2. Email (Resend → Gmail fallback)
   const emailsToSend = new Set<string>();
   if (opts.userEmail) emailsToSend.add(opts.userEmail);
-  if (opts.additionalEmails) {
-    opts.additionalEmails.forEach(e => emailsToSend.add(e));
+  if (opts.additionalEmails) opts.additionalEmails.forEach(e => emailsToSend.add(e));
+
+  if (emailsToSend.size > 0) {
+    const meta = TYPE_META[opts.type] || TYPE_META['minor_seo_change'];
+    const subject = `${meta.emoji} SEOPulse: ${meta.label}`;
+    const html = buildEmailHtml(opts.type, opts.message);
+    await sendEmail(Array.from(emailsToSend), subject, html, opts.type);
   }
 
-  if (resend && emailsToSend.size > 0) {
-    try {
-      const meta = TYPE_META[opts.type] || TYPE_META['minor_seo_change'];
-      await resend.emails.send({
-        from: 'SEOPulse Alerts <onboarding@resend.dev>',
-        to: Array.from(emailsToSend),
-        subject: `${meta.emoji} SEOPulse: ${meta.label}`,
-        html: buildEmailHtml(opts.type, opts.message),
-      });
-    } catch (e) {
-      console.warn('Resend email failed:', e);
-    }
-  }
-
-  // 3. Slack webhook (if provided)
+  // 3. Slack webhook (if configured)
   if (opts.slackWebhookUrl) {
     try {
       const meta = TYPE_META[opts.type] || TYPE_META['minor_seo_change'];
@@ -135,7 +199,7 @@ export async function createNotification(opts: NotifyOptions) {
     }
   }
 
-  // 4. Discord webhook (if provided)
+  // 4. Discord webhook (if configured)
   if (opts.discordWebhookUrl) {
     try {
       const meta = TYPE_META[opts.type] || TYPE_META['minor_seo_change'];
