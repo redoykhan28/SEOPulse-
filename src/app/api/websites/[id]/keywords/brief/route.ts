@@ -2,7 +2,73 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct:free";
+
+// Ordered list of free models to try. If one is retired, the next is used automatically.
+const FREE_MODELS = [
+  "google/gemma-2-9b-it:free",
+  "qwen/qwen-2.5-7b-instruct:free",
+  "meta-llama/llama-3.2-3b-instruct:free",
+  "microsoft/phi-3-mini-128k-instruct:free",
+];
+
+async function callOpenRouter(prompt: string, temperature = 0.7): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY!;
+  const referer = process.env.NEXT_PUBLIC_SITE_URL || "https://seopulse.app";
+
+  // If user has explicitly set a model, use it directly (no fallback)
+  const explicitModel = process.env.OPENROUTER_MODEL;
+  const modelsToTry = explicitModel ? [explicitModel] : FREE_MODELS;
+
+  let lastError = "";
+
+  for (const model of modelsToTry) {
+    const res = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "X-Title": "SEOPulse",
+        "HTTP-Referer": referer,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || `${res.status} ${res.statusText}`;
+      console.warn(`[OpenRouter] Model ${model} failed: ${msg}`);
+      lastError = String(msg);
+
+      // If it's a "no endpoints" or "unavailable" error, try the next model
+      if (
+        res.status === 404 ||
+        String(msg).toLowerCase().includes("no endpoints") ||
+        String(msg).toLowerCase().includes("unavailable")
+      ) {
+        continue;
+      }
+
+      // Any other error (auth, rate limit, etc.) — stop immediately
+      throw new Error(String(msg));
+    }
+
+    const content = data.choices?.[0]?.message?.content || "";
+    if (!content) {
+      lastError = "AI returned an empty response.";
+      continue;
+    }
+
+    console.log(`[OpenRouter] Successfully used model: ${model}`);
+    return content;
+  }
+
+  throw new Error(`All AI models unavailable. Last error: ${lastError}`);
+}
 
 export async function POST(
   req: NextRequest,
@@ -21,7 +87,7 @@ export async function POST(
     }
 
     if (!process.env.OPENROUTER_API_KEY) {
-      return NextResponse.json({ error: "OpenRouter API key is missing" }, { status: 500 });
+      return NextResponse.json({ error: "OpenRouter API key is missing. Add OPENROUTER_API_KEY to your environment variables." }, { status: 500 });
     }
 
     const prompt = `You are an expert SEO content strategist. Create a comprehensive content brief for the keyword: "${keyword}".
@@ -35,38 +101,10 @@ Please format your response in clear Markdown with the following sections:
 
 Do not include any pleasantries or conversational text before or after the brief. Just output the Markdown.`;
 
-    const aiResponse = await fetch(OPENROUTER_API_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "X-Title": "SEOPulse Content Brief",
-        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "https://seopulse.app",
-      },
-      body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-      }),
-    });
-
-    const aiData = await aiResponse.json();
-
-    if (!aiResponse.ok) {
-      // Surface the real OpenRouter error message
-      const errorMsg = aiData?.error?.message || aiData?.error || `OpenRouter error: ${aiResponse.status} ${aiResponse.statusText}`;
-      console.error("[POST /api/websites/[id]/keywords/brief] OpenRouter error:", aiData);
-      return NextResponse.json({ error: String(errorMsg) }, { status: 502 });
-    }
-
-    const brief = aiData.choices?.[0]?.message?.content || "";
-    if (!brief) {
-      return NextResponse.json({ error: "AI returned an empty response. Try again." }, { status: 502 });
-    }
-
+    const brief = await callOpenRouter(prompt, 0.7);
     return NextResponse.json({ brief });
   } catch (err: any) {
     console.error("[POST /api/websites/[id]/keywords/brief]", err);
-    return NextResponse.json({ error: err?.message || "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: err?.message || "Internal server error" }, { status: 502 });
   }
 }
