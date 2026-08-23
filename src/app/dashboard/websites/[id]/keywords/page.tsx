@@ -280,7 +280,7 @@ export default function KeywordsPage({ params }: { params: Promise<{ id: string 
             <button onClick={exportToCsv} className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/20 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-white/20 transition-colors text-gray-700 dark:text-white">
               <Download className="h-4 w-4" /> Export CSV
             </button>
-            <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+            <button onClick={() => setKeywordFile(null)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
               <Upload className="h-4 w-4" /> New Upload
             </button>
           </div>
