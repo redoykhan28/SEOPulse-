@@ -3,12 +3,15 @@ import { createClient } from "@/utils/supabase/server";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Ordered list of free models to try. If one is retired, the next is used automatically.
+// Use OpenRouter's own auto-router first — it always picks a working free model.
+// Specific slugs are fallbacks in case auto-routing is unavailable.
 const FREE_MODELS = [
+  "openrouter/auto",
+  "google/gemma-3-12b:free",
   "google/gemma-2-9b-it:free",
-  "qwen/qwen-2.5-7b-instruct:free",
+  "deepseek/deepseek-r1-0528:free",
+  "qwen/qwen3-8b:free",
   "meta-llama/llama-3.2-3b-instruct:free",
-  "microsoft/phi-3-mini-128k-instruct:free",
 ];
 
 async function callOpenRouter(prompt: string, temperature = 0.7): Promise<string> {
