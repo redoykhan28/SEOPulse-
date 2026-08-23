@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { prisma } from "@/lib/prisma";
+import { createNotification } from "@/lib/notifications";
 
 export async function POST(req: NextRequest) {
   try {
@@ -86,15 +87,17 @@ export async function POST(req: NextRequest) {
     });
 
     // Notify about website addition
-    import("@/lib/notifications").then(({ createNotification }) => {
-      createNotification({
+    try {
+      await createNotification({
         userId: dbUser!.id,
         organizationId: website.organizationId,
         type: "website_added",
         message: `Website added for monitoring: ${website.url}`,
         userEmail: user.email!,
       });
-    }).catch(console.error);
+    } catch (notificationError) {
+      console.error("[POST /api/websites] Failed to send notification:", notificationError);
+    }
 
     return NextResponse.json({ website }, { status: 201 });
   } catch (err) {
