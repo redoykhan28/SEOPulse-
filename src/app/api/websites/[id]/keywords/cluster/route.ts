@@ -45,6 +45,7 @@ Format:
         "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "X-Title": "SEOPulse Keyword Clustering",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "https://seopulse.app",
       },
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
@@ -53,11 +54,13 @@ Format:
       }),
     });
 
-    if (!aiResponse.ok) {
-      throw new Error(`OpenRouter API error: ${aiResponse.statusText}`);
-    }
-
     const aiData = await aiResponse.json();
+
+    if (!aiResponse.ok) {
+      const errorMsg = aiData?.error?.message || aiData?.error || `OpenRouter error: ${aiResponse.status} ${aiResponse.statusText}`;
+      console.error("[POST /api/websites/[id]/keywords/cluster] OpenRouter error:", aiData);
+      return NextResponse.json({ error: String(errorMsg) }, { status: 502 });
+    }
     const rawContent = aiData.choices?.[0]?.message?.content || "[]";
     
     // Attempt to extract JSON if the model added markdown despite instructions
@@ -76,8 +79,8 @@ Format:
     }
 
     return NextResponse.json({ clusters });
-  } catch (err) {
+  } catch (err: any) {
     console.error("[POST /api/websites/[id]/keywords/cluster]", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: err?.message || "Internal server error" }, { status: 500 });
   }
 }

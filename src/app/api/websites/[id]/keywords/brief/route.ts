@@ -41,6 +41,7 @@ Do not include any pleasantries or conversational text before or after the brief
         "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "X-Title": "SEOPulse Content Brief",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "https://seopulse.app",
       },
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
@@ -49,16 +50,23 @@ Do not include any pleasantries or conversational text before or after the brief
       }),
     });
 
+    const aiData = await aiResponse.json();
+
     if (!aiResponse.ok) {
-      throw new Error(`OpenRouter API error: ${aiResponse.statusText}`);
+      // Surface the real OpenRouter error message
+      const errorMsg = aiData?.error?.message || aiData?.error || `OpenRouter error: ${aiResponse.status} ${aiResponse.statusText}`;
+      console.error("[POST /api/websites/[id]/keywords/brief] OpenRouter error:", aiData);
+      return NextResponse.json({ error: String(errorMsg) }, { status: 502 });
     }
 
-    const aiData = await aiResponse.json();
     const brief = aiData.choices?.[0]?.message?.content || "";
+    if (!brief) {
+      return NextResponse.json({ error: "AI returned an empty response. Try again." }, { status: 502 });
+    }
 
     return NextResponse.json({ brief });
-  } catch (err) {
+  } catch (err: any) {
     console.error("[POST /api/websites/[id]/keywords/brief]", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: err?.message || "Internal server error" }, { status: 500 });
   }
 }
