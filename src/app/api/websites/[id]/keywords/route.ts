@@ -195,8 +195,17 @@ export async function POST(
         const notTargeted = matches.filter(m => m.matchStatus !== "targeted");
         const keywordList = notTargeted.map(m => m.keyword).join(", ");
         
+        // Prioritize "main" pages for AI analysis by sorting by URL depth (fewer slashes = higher priority)
+        // Then by URL length to prefer shorter URLs among the same depth
+        const sortedPagesForAI = [...pages].sort((a, b) => {
+          const depthA = (a.url.match(/\//g) || []).length;
+          const depthB = (b.url.match(/\//g) || []).length;
+          if (depthA !== depthB) return depthA - depthB;
+          return a.url.length - b.url.length;
+        });
+
         // Take up to 30 pages and chunk them into groups of 15
-        const pagesToAnalyze = pages.slice(0, 30);
+        const pagesToAnalyze = sortedPagesForAI.slice(0, 30);
         const CHUNK_SIZE = 15;
         const pageChunks: typeof pages[] = [];
         
