@@ -193,8 +193,13 @@ export async function POST(
     if (useAI && process.env.OPENROUTER_API_KEY) {
       try {
         const notTargeted = matches.filter(m => m.matchStatus !== "targeted");
-        const keywordList = notTargeted.map(m => m.keyword).join(", ");
-        
+        // Chunk keywords to prevent LLM output truncation (max 40 per prompt)
+        const KW_CHUNK_SIZE = 40;
+        const kwChunks: string[][] = [];
+        for (let i = 0; i < notTargeted.length; i += KW_CHUNK_SIZE) {
+          kwChunks.push(notTargeted.slice(i, i + KW_CHUNK_SIZE).map(m => m.keyword));
+        }
+
         // Prioritize "main" pages for AI analysis by sorting by URL depth (fewer slashes = higher priority)
         // Then by URL length to prefer shorter URLs among the same depth
         const sortedPagesForAI = [...pages].sort((a, b) => {
@@ -204,19 +209,14 @@ export async function POST(
           return a.url.length - b.url.length;
         });
 
-        // Take up to 30 pages and chunk them into groups of 15
+        // We can send all 30 top pages in one context since we only send meta/headers, not full text.
         const pagesToAnalyze = sortedPagesForAI.slice(0, 30);
-        const CHUNK_SIZE = 15;
-        const pageChunks: typeof pages[] = [];
-        
-        for (let i = 0; i < pagesToAnalyze.length; i += CHUNK_SIZE) {
-          pageChunks.push(pagesToAnalyze.slice(i, i + CHUNK_SIZE));
-        }
+        const pageContext = pagesToAnalyze.map(p =>
+          `URL: ${p.url}\nTitle: ${p.title || ''}\nH1: ${p.h1 || ''}\nDescription: ${p.metaDesc || ''}`
+        ).join("\n---\n");
 
-        const fetchPromises = pageChunks.map(chunk => {
-          const pageContext = chunk.map(p =>
-            `URL: ${p.url}\nTitle: ${p.title || ''}\nH1: ${p.h1 || ''}\nDescription: ${p.metaDesc || ''}`
-          ).join("\n---\n");
+        const fetchPromises = kwChunks.map(kwChunk => {
+          const keywordList = kwChunk.join(", ");
 
           const prompt = `You are an SEO expert. Below are pages crawled from a website and a list of keywords that were NOT matched by simple string matching.
 
@@ -260,9 +260,13 @@ Return ONLY a valid JSON array of objects with keys: keyword, status, page. No e
               for (const aiMatch of aiMatches) {
                 const existing = matches.find(m => m.keyword.toLowerCase() === aiMatch.keyword.toLowerCase());
                 if (existing && existing.matchStatus !== "targeted" && existing.matchStatus !== "cannibalized") {
-                  if (aiMatch.status === "targeted") {
-                    existing.matchStatus = "targeted (AI)";
-                    existing.suggestedPage = aiMatch.page;
+                  if (aiMatch.status === "targeted" && aiMatch.page) {
+                    // Hallucination check: Verify the URL exists in the crawled pages
+                    const pageExists = pages.some(p => p.url === aiMatch.page);
+                    if (pageExists) {
+                      existing.matchStatus = "targeted (AI)";
+                      existing.suggestedPage = aiMatch.page;
+                    }
                   } else if (aiMatch.status === "not targeted") {
                     existing.matchStatus = "not targeted";
                     existing.suggestedPage = null;
