@@ -287,15 +287,27 @@ async function checkLink(
 // ---------------------------------------------------------------------------
 // Smart Fetch with JS Detection and Firecrawl Fallback
 // ---------------------------------------------------------------------------
+// Realistic browser headers to bypass Cloudflare / WAF bot detection
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+};
+
 async function smartFetch(url: string, controller: AbortController): Promise<string | null> {
-  // Step 1: Fast & Free Fetch
+  // Step 1: Fetch with realistic browser headers to bypass Cloudflare WAF
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: {
-        'User-Agent': 'SEOPulseBot/3.0 (+https://seopulse.app)',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
+      headers: BROWSER_HEADERS,
       signal: controller.signal,
     });
   } catch (err: any) {
@@ -303,8 +315,9 @@ async function smartFetch(url: string, controller: AbortController): Promise<str
     return null;
   }
 
+  // If still blocked (some sites check JS challenges), log and skip gracefully
   if (!response.ok) {
-    console.warn(`[Crawler] ${response.status} on ${url}`);
+    console.warn(`[Crawler] ${response.status} on ${url} — site may require JS rendering or is geo-blocked`);
     return null;
   }
 
