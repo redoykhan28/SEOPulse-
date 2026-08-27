@@ -70,10 +70,14 @@ function matchKeywordToPages(keyword: string, pages: PageContent[]): {
     }
   }
 
-  if (exactMatches.length > 1) {
-    return { status: "cannibalized", suggestedPage: exactMatches.join(", ") };
-  } else if (exactMatches.length === 1) {
-    return { status: "targeted", suggestedPage: exactMatches[0] };
+  // Deduplicate exact matches by stripping trailing slashes
+  // This prevents false "cannibalized" flags if the database has both https://site.com and https://site.com/
+  const uniqueExactMatches = Array.from(new Set(exactMatches.map(u => u.replace(/\/$/, ''))));
+
+  if (uniqueExactMatches.length > 1) {
+    return { status: "cannibalized", suggestedPage: uniqueExactMatches.join(", ") };
+  } else if (uniqueExactMatches.length === 1) {
+    return { status: "targeted", suggestedPage: uniqueExactMatches[0] };
   }
 
   if (bestScore >= 0.5) {
