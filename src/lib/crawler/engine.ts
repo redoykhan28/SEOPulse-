@@ -224,7 +224,7 @@ async function checkLink(
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutMs = attempt === 1 ? 10000 : 15000; // 10s first try, 15s second try
+      const timeoutMs = attempt === 1 ? 5000 : 8000; // 5s first try, 8s second try to prevent Vercel timeouts
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       let status: number;
       let getResponse: Response | null = null;
@@ -301,7 +301,7 @@ async function checkLink(
       if (attempt === 1) {
         // Retry on ANY error for attempt 1 (Timeout, DNS, Connection Reset)
         // This solves transient Vercel socket/DNS limits under high concurrency.
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -448,7 +448,7 @@ async function crawlBatch(
     urls.map(async (currentUrl) => {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000); // 15s per page timeout
+        const timeout = setTimeout(() => controller.abort(), 10000); // 10s per page timeout to prevent Vercel limits
 
         const html = await smartFetch(currentUrl, controller);
         if (!html) return;
