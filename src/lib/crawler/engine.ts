@@ -297,12 +297,16 @@ async function checkLink(
 
     } catch (err: any) {
       lastError = err;
+      
+      if (attempt === 1) {
+        // Retry on ANY error for attempt 1 (Timeout, DNS, Connection Reset)
+        // This solves transient Vercel socket/DNS limits under high concurrency.
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+
+      // If we reach here, it's attempt 2 and it failed again.
       if (err.name === 'AbortError') {
-        if (attempt === 1) {
-          // Wait 2 seconds and retry on the first timeout
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          continue;
-        }
         cache.set(url, 'timeout');
         return null; // Timeout → benefit of the doubt, not flagged as broken
       }
