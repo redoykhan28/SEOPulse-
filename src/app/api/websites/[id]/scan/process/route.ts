@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { processCrawlChunk } from "@/lib/crawler/engine";
 import { createNotification, isAlertEnabled } from "@/lib/notifications";
 
+export const maxDuration = 300; // Allow function to run up to 5 minutes on Vercel Pro
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -27,8 +29,8 @@ export async function POST(
       return NextResponse.json({ error: "Scan not running or not found" }, { status: 400 });
     }
 
-    // Process a chunk of 20 URLs
-    const result = await processCrawlChunk(scan.id, 20);
+    // Process a chunk of 5 URLs (down from 20 to prevent Vercel timeouts)
+    const result = await processCrawlChunk(scan.id, 5);
 
     if (result.isComplete) {
       // Calculate overall score

@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { processCrawlChunk } from "@/lib/crawler/engine";
 import { createNotification, isAlertEnabled } from "@/lib/notifications";
 
+export const maxDuration = 300; // Allow function to run up to 5 minutes on Vercel Pro
+
 export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
@@ -26,8 +28,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Scan not running or not found" }, { status: 400 });
     }
 
-    // Process a chunk of 40 URLs (Cron can handle slightly larger chunks safely within 60s)
-    const result = await processCrawlChunk(scan.id, 40);
+    // Process a chunk (down to 10 from 40 to prevent Vercel timeouts)
+    const result = await processCrawlChunk(scan.id, 10);
 
     if (result.isComplete) {
       // Calculate overall score
