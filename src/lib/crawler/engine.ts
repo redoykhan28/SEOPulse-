@@ -220,93 +220,112 @@ async function checkLink(
     }
   }
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000); // 10 s total budget
-    let status: number;
-    let getResponse: Response | null = null;
-
+  let lastError: any;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      // ── Step 1: Fast HEAD probe with a realistic browser UA ───────────────
-      const headRes = await fetch(url, {
-        method: 'HEAD',
-        headers: LINK_CHECK_HEADERS,
-        signal: controller.signal,
-        redirect: 'follow',
-      });
-      status = headRes.status;
+      const controller = new AbortController();
+      const timeoutMs = attempt === 1 ? 10000 : 15000; // 10s first try, 15s second try
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let status: number;
+      let getResponse: Response | null = null;
 
-      // ── Step 2: GET confirmation for ANY potentially-broken status ────────
-      // HEAD is unreliable: many servers (Paylocity, KC Current, Cloudflare
-      // WAFs, etc.) return 404/405/400 on HEAD but serve 200 on GET.
-      // We confirm with GET before ever flagging a link as broken.
-      // Only genuine 2xx and 3xx HEAD responses are trusted without GET.
-      const needsGetConfirmation =
-        status === 400 || status === 404 || status === 405 ||
-        status === 410 || status === 500;
-
-      if (needsGetConfirmation) {
-        const getRes = await fetch(url, {
-          method: 'GET',
+      try {
+        // ── Step 1: Fast HEAD probe with a realistic browser UA ───────────────
+        const headRes = await fetch(url, {
+          method: 'HEAD',
           headers: LINK_CHECK_HEADERS,
           signal: controller.signal,
           redirect: 'follow',
         });
-        status = getRes.status;
-        // Retain GET response so we can reuse it for soft-404 check below
-        if (status >= 200 && status < 300) getResponse = getRes;
-      }
+        status = headRes.status;
 
-      // ── Step 3: Soft-404 check on confirmed 200 OK responses ─────────────
-      // Some CMSes (WordPress, Shopify, HubSpot) return 200 even when the
-      // page content is a "not found" error page.
-      if (status >= 200 && status < 300) {
-        // Reuse the GET body from step 2 if we already have it
-        if (!getResponse) {
-          getResponse = await fetch(url, {
+        // ── Step 2: GET confirmation for ANY potentially-broken status ────────
+        // HEAD is unreliable: many servers (Paylocity, KC Current, Cloudflare
+        // WAFs, etc.) return 404/405/400 on HEAD but serve 200 on GET.
+        // We confirm with GET before ever flagging a link as broken.
+        // Only genuine 2xx and 3xx HEAD responses are trusted without GET.
+        const needsGetConfirmation =
+          status === 400 || status === 404 || status === 405 ||
+          status === 410 || status === 500;
+
+        if (needsGetConfirmation) {
+          const getRes = await fetch(url, {
             method: 'GET',
             headers: LINK_CHECK_HEADERS,
             signal: controller.signal,
             redirect: 'follow',
           });
+          status = getRes.status;
+          // Retain GET response so we can reuse it for soft-404 check below
+          if (status >= 200 && status < 300) getResponse = getRes;
         }
-        const contentType = getResponse.headers.get('content-type') ?? '';
-        if (contentType.includes('text/html')) {
-          const body = await getResponse.text();
-          if (isSoft404(body)) {
-            cache.set(url, 'soft404');
-            return { url, status: 'soft 404 (page says "not found")' };
+
+        // ── Step 3: Soft-404 check on confirmed 200 OK responses ─────────────
+        // Some CMSes (WordPress, Shopify, HubSpot) return 200 even when the
+        // page content is a "not found" error page.
+        if (status >= 200 && status < 300) {
+          // Reuse the GET body from step 2 if we already have it
+          if (!getResponse) {
+            getResponse = await fetch(url, {
+              method: 'GET',
+              headers: LINK_CHECK_HEADERS,
+              signal: controller.signal,
+              redirect: 'follow',
+            });
+          }
+          const contentType = getResponse.headers.get('content-type') ?? '';
+          if (contentType.includes('text/html')) {
+            const body = await getResponse.text();
+            if (isSoft404(body)) {
+              cache.set(url, 'soft404');
+              return { url, status: 'soft 404 (page says "not found")' };
+            }
           }
         }
+      } finally {
+        clearTimeout(timeout);
       }
-    } finally {
-      clearTimeout(timeout);
-    }
 
-    // ── Final verdict ────────────────────────────────────────────────────────
-    cache.set(url, status);
-    if (isBotBlock(status)) return null; // Bot-blocked — page exists, just inaccessible
-    if (status >= 500)      return null; // Server error — transient, not a broken link
-    if (status === 404 || status === 410) return { url, status }; // Genuinely missing
-    
-    // Any other 4xx (like 408 Timeout, 418 I'm a teapot) we'll give the benefit of the doubt
-    return null; // 2xx / 3xx / other 4xx — healthy
+      // ── Final verdict ────────────────────────────────────────────────────────
+      cache.set(url, status);
+      if (isBotBlock(status)) return null; // Bot-blocked — page exists, just inaccessible
+      if (status >= 500)      return null; // Server error — transient, not a broken link
+      if (status === 404 || status === 410) return { url, status }; // Genuinely missing
+      
+      // Any other 4xx (like 408 Timeout, 418 I'm a teapot) we'll give the benefit of the doubt
+      return null; // 2xx / 3xx / other 4xx — healthy
 
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      cache.set(url, 'timeout');
-      return null; // Timeout → benefit of the doubt, not flagged as broken
-    }
-    // ENOTFOUND / ECONNREFUSED = domain doesn't resolve = genuinely broken
-    const isNetworkError =
-      err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED';
-    if (isNetworkError) {
+    } catch (err: any) {
+      lastError = err;
+      if (err.name === 'AbortError') {
+        if (attempt === 1) {
+          // Wait 2 seconds and retry on the first timeout
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+        cache.set(url, 'timeout');
+        return null; // Timeout → benefit of the doubt, not flagged as broken
+      }
+
+      // Check for Redirect Loops (Node's fetch throws a specific cause or message)
+      if (err.cause?.message === 'redirect count exceeded' || err.message?.includes('redirect count exceeded')) {
+        cache.set(url, 'error');
+        return { url, status: 'Too many redirects (Loop)' };
+      }
+
+      // ENOTFOUND / ECONNREFUSED = domain doesn't resolve = genuinely broken
+      const isNetworkError =
+        err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED';
+      if (isNetworkError) {
+        cache.set(url, 'error');
+        return { url, status: 'DNS failure — domain not found' };
+      }
+      
       cache.set(url, 'error');
-      return { url, status: 'DNS failure — domain not found' };
+      return null; // Unknown error — benefit of the doubt
     }
-    cache.set(url, 'error');
-    return null; // Unknown error — benefit of the doubt
   }
+  return null;
 }
 
 
