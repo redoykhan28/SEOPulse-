@@ -131,118 +131,134 @@ function isPaginationVariant(url: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Broken Link Checker — checks a single URL via HEAD request with 5s timeout.
-// Results are cached in a per-scan Map to avoid redundant network requests.
-// Returns the broken URL + status code, or null if the link is healthy.
+// Broken Link Checker — Market-standard implementation.
+//
+// Strategy (mirrors Screaming Frog / Semrush behaviour):
+//   1. Fast HEAD with a realistic browser UA
+//   2. Any ambiguous status (400, 404, 405, 410, 500) is ALWAYS confirmed
+//      with a full GET before being flagged — eliminates HEAD-only false positives
+//   3. On a confirmed 200, run soft-404 pattern matching against title/h1 only
+//      (not raw body) to avoid false matches on legitimate content
+//   4. Bot-blocking codes (401, 402, 403, 429) are treated as "exists" — not broken
+//   5. 5xx server errors are skipped — transient and not the site owner's fault
 // ---------------------------------------------------------------------------
+
+// Moved to module scope — defined once, not re-created on every checkLink() call.
+
+// Status codes that mean the SERVER is actively blocking us, NOT that the page
+// doesn't exist. Treat as "exists but inaccessible" — NOT broken.
+function isBotBlock(status: number): boolean {
+  return [401, 402, 403, 429].includes(status);
+}
+
+// Realistic browser UA used by both the HEAD probe and the GET confirmation.
+// Identical to BROWSER_HEADERS below so servers can't distinguish us from a
+// real user based on User-Agent alone.
+const LINK_CHECK_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+// Soft-404 patterns — intentionally narrow and title/h1-focused.
+// We only match phrases that unambiguously signal a "not found" state.
+// Broad phrases like "no longer available" are intentionally excluded to
+// avoid false positives on legitimate pages (e.g. "product no longer available
+// in this color", "feature no longer available in your region").
+const SOFT_404_PATTERNS = [
+  /^404\b/i,                                       // Title starts with "404"
+  /\b404\s*[–—\-]\s*(not found|error|page)\b/i,   // "404 - Not Found" / "404 — Error"
+  /^page\s+not\s+found$/i,                         // Exact: "Page Not Found" as title
+  /^not\s+found$/i,                                // Exact: "Not Found"
+  /this\s+page\s+(doesn['\u2019]?t|does\s+not)\s+exist/i,
+  /the\s+page\s+you\s+(requested|were\s+looking\s+for)\s+(could\s+not\s+be\s+found|doesn['\u2019]?t\s+exist)/i,
+  /we\s+couldn['\u2019]?t\s+find\s+that\s+page/i,
+  /oops[!,.]?\s+(this\s+page|that\s+page)\s+(doesn['\u2019]?t|does\s+not)\s+exist/i,
+];
+
+function isSoft404(body: string): boolean {
+  const sample = body.slice(0, 5120);
+  // Only match against title and h1 — not raw body text.
+  // Raw body matching causes too many false positives on large pages.
+  const titleMatch = sample.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const h1Match    = sample.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const titleText  = (titleMatch?.[1] ?? '').replace(/<[^>]+>/g, '').trim();
+  const h1Text     = (h1Match?.[1]    ?? '').replace(/<[^>]+>/g, '').trim();
+  // Combine title + h1 only — deliberately NOT the full body
+  const checkText  = `${titleText} ${h1Text}`;
+  return SOFT_404_PATTERNS.some(pattern => pattern.test(checkText));
+}
+
 async function checkLink(
   url: string,
   cache: Map<string, number | 'timeout' | 'error' | 'soft404'>,
 ): Promise<{ url: string; status: number | string } | null> {
-  // Return cached result immediately
+
+  // ── Cache hit: resolve immediately without any network call ──────────────
   if (cache.has(url)) {
     const cached = cache.get(url)!;
-    if (cached === 'soft404') return { url, status: 'soft 404 (page says "not found")' };
+    if (cached === 'soft404')                  return { url, status: 'soft 404 (page says "not found")' };
     if (cached === 'timeout' || cached === 'error') return null;
-    
     if (typeof cached === 'number') {
-      // Mirror the exact same logic as below
-      if (isBotBlock(cached)) return null;
-      if (cached >= 500) return null;
-      if (cached === 404 || cached === 410) return { url, status: cached };
-      if (cached >= 400 && cached < 500) return { url, status: cached };
+      if (isBotBlock(cached))   return null;
+      if (cached >= 500)        return null;
+      if (cached === 404 || cached === 410)    return { url, status: cached };
+      if (cached >= 400 && cached < 500)       return { url, status: cached };
       return null;
     }
   }
 
-  // Status codes that mean the SERVER is actively blocking us, NOT that the page doesn't exist.
-  // TripAdvisor -> 403, Marriott -> 429, Paywalled sites -> 402, Auth required -> 401
-  // Treat these as "exists but inaccessible" — NOT broken.
-  function isBotBlock(status: number): boolean {
-    return [401, 402, 403, 429].includes(status);
-  }
-
-  // Soft 404 keyword patterns — phrases that appear in the page body/title when a CMS
-  // returns 200 OK but is actually showing a "not found" page.
-  const SOFT_404_PATTERNS = [
-    /page\s+not\s+found/i,
-    /404\s*[–—-]\s*(not found|error|page)/i,
-    /this\s+page\s+(doesn['']?t|does\s+not)\s+exist/i,
-    /the\s+page\s+you\s+(requested|were\s+looking\s+for)\s+(could\s+not\s+be\s+found|doesn['']?t\s+exist)/i,
-    /no\s+longer\s+(exists|available)/i,
-    /we\s+couldn['']?t\s+find\s+that\s+page/i,
-    /sorry,\s+we\s+can['']?t\s+find/i,
-    /oops[!,.]?\s+(this\s+page|that\s+page)/i,
-    /content\s+not\s+found/i,
-    /error\s+404/i,
-  ];
-
-  function isSoft404(body: string): boolean {
-    // Only check the first 5KB — the error message is always near the top
-    const sample = body.slice(0, 5120);
-    // Extract just the <title> and <h1> text for more accurate matching
-    const titleMatch = sample.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const h1Match = sample.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const titleText = titleMatch?.[1] || '';
-    const h1Text = h1Match?.[1] || '';
-    const checkText = `${titleText} ${h1Text} ${sample.slice(0, 2000)}`;
-    return SOFT_404_PATTERNS.some(pattern => pattern.test(checkText));
-  }
-
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10 s total budget
     let status: number;
     let getResponse: Response | null = null;
 
     try {
-      // Step 1: Fast HEAD request
+      // ── Step 1: Fast HEAD probe with a realistic browser UA ───────────────
       const headRes = await fetch(url, {
         method: 'HEAD',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
-          'Accept': 'text/html,application/xhtml+xml,*/*',
-        },
+        headers: LINK_CHECK_HEADERS,
         signal: controller.signal,
         redirect: 'follow',
       });
       status = headRes.status;
 
-      // Step 2: If HEAD returns ambiguous/anti-bot code, verify with a real GET
-      // (400 Bad Request, 405 Method Not Allowed, 500 Server Error — all could be HEAD-specific rejections)
-      if (status === 400 || status === 405 || status === 500) {
-        const retryRes = await fetch(url, {
+      // ── Step 2: GET confirmation for ANY potentially-broken status ────────
+      // HEAD is unreliable: many servers (Paylocity, KC Current, Cloudflare
+      // WAFs, etc.) return 404/405/400 on HEAD but serve 200 on GET.
+      // We confirm with GET before ever flagging a link as broken.
+      // Only genuine 2xx and 3xx HEAD responses are trusted without GET.
+      const needsGetConfirmation =
+        status === 400 || status === 404 || status === 405 ||
+        status === 410 || status === 500;
+
+      if (needsGetConfirmation) {
+        const getRes = await fetch(url, {
           method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
-            'Accept': 'text/html,application/xhtml+xml,*/*',
-          },
+          headers: LINK_CHECK_HEADERS,
           signal: controller.signal,
           redirect: 'follow',
         });
-        status = retryRes.status;
-        // Keep GET response for soft 404 check below
-        if (status >= 200 && status < 300) getResponse = retryRes;
+        status = getRes.status;
+        // Retain GET response so we can reuse it for soft-404 check below
+        if (status >= 200 && status < 300) getResponse = getRes;
       }
 
-      // Step 3: Soft 404 detection — only on apparent 200 OK responses
-      // Some CMSes (WordPress, Shopify, HubSpot) return 200 even when page content says "Not Found"
+      // ── Step 3: Soft-404 check on confirmed 200 OK responses ─────────────
+      // Some CMSes (WordPress, Shopify, HubSpot) return 200 even when the
+      // page content is a "not found" error page.
       if (status >= 200 && status < 300) {
-        // If we don't already have a GET body, fetch it now
+        // Reuse the GET body from step 2 if we already have it
         if (!getResponse) {
           getResponse = await fetch(url, {
             method: 'GET',
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; SEOPulseBot/3.0; +https://seopulse.app)',
-              'Accept': 'text/html,application/xhtml+xml,*/*',
-            },
+            headers: LINK_CHECK_HEADERS,
             signal: controller.signal,
             redirect: 'follow',
           });
         }
-
-        // Only check HTML responses, skip PDFs, images, JSON, etc.
-        const contentType = getResponse.headers.get('content-type') || '';
+        const contentType = getResponse.headers.get('content-type') ?? '';
         if (contentType.includes('text/html')) {
           const body = await getResponse.text();
           if (isSoft404(body)) {
@@ -255,31 +271,28 @@ async function checkLink(
       clearTimeout(timeout);
     }
 
+    // ── Final verdict ────────────────────────────────────────────────────────
     cache.set(url, status);
+    if (isBotBlock(status)) return null; // Bot-blocked — page exists, just inaccessible
+    if (status >= 500)      return null; // Server error — transient, not a broken link
+    if (status === 404 || status === 410) return { url, status }; // Genuinely missing
+    if (status >= 400 && status < 500)   return { url, status }; // Other hard 4xx
+    return null; // 2xx / 3xx — healthy
 
-    // Only flag genuinely broken links:
-    // 404 = Page Not Found, 410 = Page Permanently Removed
-    // Other 4xx are bot-blocks or auth walls — skip them
-    // 5xx are server errors — skip (page may work fine for real users)
-    if (isBotBlock(status)) return null; // Active bot block — not broken
-    if (status >= 500) return null; // Server errors — not our problem, not a "broken link"
-    if (status === 404 || status === 410) return { url, status }; // Genuinely missing pages
-    if (status >= 400 && status < 500) return { url, status }; // Other 4xx like 408 timeout
-    return null; // 2xx / 3xx — all good
   } catch (err: any) {
     if (err.name === 'AbortError') {
-      // A timeout likely means Cloudflare rate-limiting — don't penalise
       cache.set(url, 'timeout');
-      return null; // Don't report timeouts as broken — too many false positives
+      return null; // Timeout → benefit of the doubt, not flagged as broken
     }
-    // ENOTFOUND / ECONNREFUSED = domain doesn't exist = genuinely broken
-    const isNetworkError = err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED';
+    // ENOTFOUND / ECONNREFUSED = domain doesn't resolve = genuinely broken
+    const isNetworkError =
+      err.cause?.code === 'ENOTFOUND' || err.cause?.code === 'ECONNREFUSED';
     if (isNetworkError) {
       cache.set(url, 'error');
       return { url, status: 'DNS failure — domain not found' };
     }
     cache.set(url, 'error');
-    return null; // Unknown error — benefit of the doubt, don't flag
+    return null; // Unknown error — benefit of the doubt
   }
 }
 
@@ -466,13 +479,17 @@ async function crawlBatch(
           } catch { /* ignore malformed URLs */ }
         }
 
-        // --- Check for broken links (HEAD requests, max 25 per page) ---
+        // --- Check for broken links (market-standard: all unique links, cached results reused) ---
         const uniqueLinks = [...new Set(allHrefs)];
-        // Internal links that are already visited are known-good; skip them.
-        // Limit external/unknown links to 25 per page to keep scans fast.
+        // Filter logic:
+        //   • Internal links already in `visited` are confirmed-healthy crawled pages — skip.
+        //   • Any link already in `linkStatusCache` will be resolved instantly from cache — include.
+        //   • External links are never in `visited`, so they always pass through to checkLink.
+        // Cap at 50 per page (up from 25) to improve coverage on link-heavy pages.
+        // Cache ensures repeated external links across pages cost only one network round-trip.
         const linksToCheck = uniqueLinks
           .filter(u => !visited.has(u) || linkStatusCache.has(u))
-          .slice(0, 25);
+          .slice(0, 50);
 
         const brokenResults = (await Promise.all(
           linksToCheck.map(u => checkLink(u, linkStatusCache))
