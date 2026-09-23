@@ -147,8 +147,12 @@ function isPaginationVariant(url: string): boolean {
 
 // Status codes that mean the SERVER is actively blocking us, NOT that the page
 // doesn't exist. Treat as "exists but inaccessible" — NOT broken.
+// 400: Bad Request (often strict WAFs or missing query params like Google Calendar)
+// 403: Forbidden (Cloudflare/WAF)
+// 405: Method Not Allowed (Strict WAFs)
+// 429: Too Many Requests (Rate limit)
 function isBotBlock(status: number): boolean {
-  return [401, 402, 403, 429].includes(status);
+  return [400, 401, 402, 403, 405, 406, 429].includes(status);
 }
 
 // Realistic browser UA used by both the HEAD probe and the GET confirmation.
@@ -156,8 +160,16 @@ function isBotBlock(status: number): boolean {
 // real user based on User-Agent alone.
 const LINK_CHECK_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
 };
 
 // Soft-404 patterns — intentionally narrow and title/h1-focused.
@@ -276,8 +288,9 @@ async function checkLink(
     if (isBotBlock(status)) return null; // Bot-blocked — page exists, just inaccessible
     if (status >= 500)      return null; // Server error — transient, not a broken link
     if (status === 404 || status === 410) return { url, status }; // Genuinely missing
-    if (status >= 400 && status < 500)   return { url, status }; // Other hard 4xx
-    return null; // 2xx / 3xx — healthy
+    
+    // Any other 4xx (like 408 Timeout, 418 I'm a teapot) we'll give the benefit of the doubt
+    return null; // 2xx / 3xx / other 4xx — healthy
 
   } catch (err: any) {
     if (err.name === 'AbortError') {
