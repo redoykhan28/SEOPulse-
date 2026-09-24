@@ -68,6 +68,13 @@ function normalizeUrl(baseUrl: string, href: string): string | null {
     // Remove fragment (#hash)
     url.hash = '';
 
+    // FIX: Normalize www vs non-www — always strip www. for consistent deduplication.
+    // This prevents https://www.example.com/page and https://example.com/page
+    // from being treated as different pages.
+    if (url.hostname.startsWith('www.')) {
+      url.hostname = url.hostname.slice(4);
+    }
+
     // SMART QUERY STRING HANDLING:
     // If the path itself ends with a known scripting extension, the query
     // string is part of the page identity (e.g. index.php?page=about).
@@ -358,6 +365,7 @@ async function smartFetch(url: string, controller: AbortController): Promise<str
     response = await fetch(url, {
       headers: BROWSER_HEADERS,
       signal: controller.signal,
+      redirect: 'follow',
     });
   } catch (err: any) {
     if (err.name !== 'AbortError') console.warn(`[Crawler] Network error on ${url}: ${err.message}`);
@@ -376,12 +384,26 @@ async function smartFetch(url: string, controller: AbortController): Promise<str
   const rawHtml = await response.text();
   const $ = cheerio.load(rawHtml);
 
-  // Step 2: JS-Heavy Detection
+  // Step 2: Improved JS-Heavy Detection
+  // FIX: Exclude false positives from LiteSpeed, WordPress, Drupal, and similar
+  // CMSes that serve full HTML but defer scripts with type="litespeed/javascript".
+  // These pages have real content — they are NOT JS-heavy SPAs.
+  const hasLiteSpeed = rawHtml.includes('litespeed') || rawHtml.includes('LiteSpeed');
+  const hasCmsMarker = rawHtml.includes('wp-content') || rawHtml.includes('drupal') || 
+                       rawHtml.includes('elementor') || rawHtml.includes('wordpress');
+  
   const hasSpaMount = $('#root, #__next, #app').length > 0;
-  const isBodyEmpty = $('body').text().replace(/\s+/g, '').length < 300;
+  // FIX: Increase threshold and extract text more carefully — strip deferred
+  // script tags that CMSes like LiteSpeed rewrite to type="litespeed/javascript"
+  const $bodyCloneCheck = $('body').clone();
+  $bodyCloneCheck.find('script, style, noscript, svg, link').remove();
+  const bodyTextLength = $bodyCloneCheck.text().replace(/\s+/g, '').length;
+  const isBodyEmpty = bodyTextLength < 200;
   const hasNuxt = rawHtml.includes('__NUXT__');
   
-  const isJsHeavy = (hasSpaMount && isBodyEmpty) || hasNuxt;
+  // FIX: Don't flag CMS sites with deferred scripts as JS-heavy.
+  // Real SPAs (React/Vue/Angular) have genuinely empty bodies + SPA mount points.
+  const isJsHeavy = !hasLiteSpeed && !hasCmsMarker && ((hasSpaMount && isBodyEmpty) || hasNuxt);
 
   // Step 3: Route to Firecrawl if JS-heavy and API key exists
   const firecrawlKey = process.env.FIRECRAWL_API_KEY;
@@ -475,6 +497,26 @@ async function crawlBatch(
       $bodyClone.find('script, style, noscript, svg').remove();
       const textContent = $bodyClone.text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
 
+      // --- FIX: Canonical URL deduplication ---
+      // If the page declares a canonical URL that is different from the current URL,
+      // skip this page to avoid duplicates. The canonical version will be crawled
+      // when it's encountered (or is already in the queue).
+      const canonicalHref = $('link[rel="canonical"]').attr('href')?.trim();
+      if (canonicalHref) {
+        const canonicalNormalized = normalizeUrl(websiteUrl, canonicalHref);
+        if (canonicalNormalized && canonicalNormalized !== currentUrl) {
+          // This page declares a different canonical — skip it but queue the canonical
+          const canonicalHostname = new URL(canonicalNormalized).hostname;
+          const bareHostname = startHostname.replace(/^www\./, '');
+          const bareLinkHostname = canonicalHostname.replace(/^www\./, '');
+          if (bareLinkHostname === bareHostname && !visited.has(canonicalNormalized)) {
+            newlyDiscovered.push(canonicalNormalized);
+          }
+          console.log(`[Crawler] Skipping ${currentUrl} — canonical points to ${canonicalNormalized}`);
+          continue;
+        }
+      }
+
       // --- SEO Rules Evaluation ---
       const issues: CrawledPage['issues'] = [];
       for (const rule of seoRules) {
@@ -517,10 +559,13 @@ async function crawlBatch(
       });
 
       // --- Discover new internal links ---
+      // FIX: Use bare hostname comparison (strip www.) so www.example.com links
+      // discovered on example.com are treated as internal and crawled.
+      const bareStartHostname = startHostname.replace(/^www\./, '');
       for (const absoluteUrl of allHrefs) {
         try {
-          const linkHostname = new URL(absoluteUrl).hostname;
-          if (linkHostname === startHostname && !visited.has(absoluteUrl)) {
+          const linkHostname = new URL(absoluteUrl).hostname.replace(/^www\./, '');
+          if (linkHostname === bareStartHostname && !visited.has(absoluteUrl)) {
             newlyDiscovered.push(absoluteUrl);
           }
         } catch { /* ignore malformed URLs */ }
@@ -584,18 +629,43 @@ async function fetchSitemapUrls(
   if (depth > 3) return []; // Prevent infinite recursion
   
   const url = sitemapUrl ?? new URL('/sitemap.xml', baseUrl).href;
-  const BOT_UA = 'SEOPulseBot/3.0 (+https://seopulse.app)';
 
-  let text: string;
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': BOT_UA } });
-    if (!res.ok) return [];
-    text = await res.text();
-  } catch {
-    return [];
+  // FIX: Try with browser UA first (many WAFs block custom bot UAs like LiteSpeed, Cloudflare)
+  // Then fall back to bot UA if browser UA fails (some sitemaps require bot identification).
+  let text: string = '';
+  let fetched = false;
+  
+  for (const ua of [
+    BROWSER_HEADERS['User-Agent'],                        // Browser UA — bypasses WAFs
+    'SEOPulseBot/3.0 (+https://seopulse.app)',           // Bot UA — fallback for strict servers
+    'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', // Googlebot — some sitemaps only serve to bots
+  ]) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/xml,application/xml,text/html,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        redirect: 'follow',
+      });
+      if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        text = await res.text();
+        // Verify this is actually XML/sitemap content (some WAFs return HTML login pages)
+        if (text.includes('<urlset') || text.includes('<sitemapindex') || text.includes('<loc>')) {
+          fetched = true;
+          break;
+        }
+      }
+    } catch { /* try next UA */ }
   }
+  
+  if (!fetched) return [];
 
   const pageUrls: string[] = [];
+  // FIX: Strip bare www. from hostname for consistent matching
+  const bareHostname = hostname.replace(/^www\./, '');
 
   // Detect if this is a sitemap INDEX (contains <sitemapindex> or <sitemap> tags)
   const isSitemapIndex = /<sitemapindex/i.test(text);
@@ -615,8 +685,9 @@ async function fetchSitemapUrls(
       const rawUrl = match[1].trim();
       try {
         const parsed = new URL(rawUrl);
-        // Only include pages from the same hostname
-        if (parsed.hostname === hostname) {
+        // FIX: Use bare hostname comparison (strip www.) for consistent matching
+        const parsedBareHostname = parsed.hostname.replace(/^www\./, '');
+        if (parsedBareHostname === bareHostname) {
           const normalized = normalizeUrl(baseUrl, rawUrl);
           if (normalized) pageUrls.push(normalized);
         }
@@ -646,13 +717,22 @@ export async function processCrawlChunk(
 
   if (!scan) throw new Error('Scan not found');
 
-  const startHostname = new URL(scan.website.url).hostname;
+  // FIX: Normalize the startHostname by stripping www. — consistent with normalizeUrl()
+  const startHostname = new URL(scan.website.url).hostname.replace(/^www\./, '');
 
   // Restore queue state from DB
+  // FIX: Always normalize the seed URL to prevent trailing-slash duplicates.
+  // Previously, the raw website.url (e.g. "https://thenines.com/") was stored
+  // in pendingUrls without normalization, causing a duplicate with the
+  // link-discovered version ("https://thenines.com" — no trailing slash).
   let pendingUrls: string[] = scan.pendingUrls
-    ? JSON.parse(scan.pendingUrls)
+    ? JSON.parse(scan.pendingUrls).map((u: string) => normalizeUrl(u, u) || u)
     : [normalizeUrl(scan.website.url, scan.website.url)!];
-  const scannedUrls: string[] = scan.scannedUrls ? JSON.parse(scan.scannedUrls) : [];
+  // Deduplicate the restored pending queue (in case old data had duplicates)
+  pendingUrls = [...new Set(pendingUrls)];
+  const scannedUrls: string[] = scan.scannedUrls
+    ? JSON.parse(scan.scannedUrls).map((u: string) => normalizeUrl(u, u) || u)
+    : [];
   
   // Restore organically discovered URLs state
   let discoveredUrls: string[] = (scan as any).discoveredUrls ? JSON.parse((scan as any).discoveredUrls) : [];

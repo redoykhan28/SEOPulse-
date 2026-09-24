@@ -26,12 +26,24 @@ export async function POST(
     if (!isMember) return NextResponse.json({ error: "Unauthorized to scan this website" }, { status: 403 });
 
     // Initialize the queue state for the new scan
+    // FIX: Normalize the seed URL to prevent trailing-slash duplicates.
+    // normalizeUrl strips trailing slashes, www. prefix, and query strings
+    // for consistent deduplication with URLs discovered during crawling.
+    const normalizedSeedUrl = (() => {
+      try {
+        const u = new URL(website.url);
+        if (u.hostname.startsWith('www.')) u.hostname = u.hostname.slice(4);
+        u.hash = '';
+        return u.href.replace(/\/$/, '') || website.url;
+      } catch { return website.url; }
+    })();
+
     const scan = await prisma.scan.create({
       data: { 
         websiteId, 
         status: "RUNNING", 
         startedAt: new Date(),
-        pendingUrls: JSON.stringify([website.url]),
+        pendingUrls: JSON.stringify([normalizedSeedUrl]),
         scannedUrls: JSON.stringify([])
       },
     });
