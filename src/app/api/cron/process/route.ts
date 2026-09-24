@@ -28,8 +28,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Scan not running or not found" }, { status: 400 });
     }
 
-    // Process a chunk (down to 10 from 40 to prevent Vercel timeouts)
-    const result = await processCrawlChunk(scan.id, 10);
+    // Process a chunk sequentially (concurrency=1 to prevent Vercel timeouts)
+    const result = await processCrawlChunk(scan.id, 10, 1);
 
     if (result.isComplete) {
       // Calculate overall score

@@ -440,125 +440,136 @@ async function crawlBatch(
   startHostname: string,
   visited: Set<string>,
   linkStatusCache: Map<string, number | 'timeout' | 'error' | 'soft404'>,
-): Promise<string[]> {
-  // Returns a list of newly discovered internal URLs from this batch
+): Promise<{ discovered: string[]; failed: string[] }> {
+  // Returns discovered internal URLs AND URLs that failed to fetch (for retry)
   const newlyDiscovered: string[] = [];
+  const failedUrls: string[] = [];
 
-  await Promise.all(
-    urls.map(async (currentUrl) => {
+  // Process pages SEQUENTIALLY to avoid overwhelming Vercel's connection limits
+  for (const currentUrl of urls) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10s per page
+
+      let html: string | null = null;
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000); // 10s per page timeout to prevent Vercel limits
-
-        const html = await smartFetch(currentUrl, controller);
-        if (!html) return;
-
-        const $ = cheerio.load(html);
-
-        // --- Content Extraction ---
-        const title = $('title').text().trim() || null;
-        const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
-        const h1 = $('h1').first().text().trim() || null;
-
-        const $bodyClone = $('body').clone();
-        $bodyClone.find('script, style, noscript, svg').remove();
-        const textContent = $bodyClone.text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
-
-        // --- SEO Rules Evaluation ---
-        const issues: CrawledPage['issues'] = [];
-        for (const rule of seoRules) {
-          const result = rule.evaluate($, currentUrl);
-          issues.push({
-            ruleId: rule.id,
-            passed: result.passed,
-            severity: result.severity,
-            details: result.details,
-          });
-        }
-
-        // --- Persist to DB ---
-        const page = await prisma.page.upsert({
-          where: { websiteId_url: { websiteId, url: currentUrl } },
-          update: { title, metaDesc, h1, textContent },
-          create: { websiteId, url: currentUrl, title, metaDesc, h1, textContent },
-        });
-
-        await prisma.seoIssue.createMany({
-          data: issues.map(issue => ({
-            scanId,
-            pageId: page.id,
-            checkType: issue.ruleId,
-            passed: issue.passed,
-            severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
-            details: issue.details,
-          })) as any,
-        });
-
-        // --- Collect all links for broken-link checking + discovery ---
-        const allHrefs: string[] = [];
-        $('a[href]').each((_, el) => {
-          const href = $(el).attr('href');
-          if (!href) return;
-          // Skip non-HTTP schemes (mailto, tel, javascript, #hash only)
-          if (/^(mailto:|tel:|javascript:|#)/i.test(href.trim())) return;
-          const absoluteUrl = normalizeUrl(websiteUrl, href);
-          if (absoluteUrl) allHrefs.push(absoluteUrl);
-        });
-
-        // --- Discover new internal links ---
-        for (const absoluteUrl of allHrefs) {
-          try {
-            const linkHostname = new URL(absoluteUrl).hostname;
-            if (linkHostname === startHostname && !visited.has(absoluteUrl)) {
-              newlyDiscovered.push(absoluteUrl);
-            }
-          } catch { /* ignore malformed URLs */ }
-        }
-
-        // --- Check for broken links (market-standard: all unique links, cached results reused) ---
-        const uniqueLinks = [...new Set(allHrefs)];
-        // Filter logic:
-        //   • Internal links already in `visited` are confirmed-healthy crawled pages — skip.
-        //   • Any link already in `linkStatusCache` will be resolved instantly from cache — include.
-        //   • External links are never in `visited`, so they always pass through to checkLink.
-        // Cap at 50 per page (up from 25) to improve coverage on link-heavy pages.
-        // Cache ensures repeated external links across pages cost only one network round-trip.
-        const linksToCheck = uniqueLinks
-          .filter(u => !visited.has(u) || linkStatusCache.has(u))
-          .slice(0, 50);
-
-        const brokenResults = (await Promise.all(
-          linksToCheck.map(u => checkLink(u, linkStatusCache))
-        )).filter(Boolean) as { url: string; status: number | string }[];
-
-        // Save broken_links issue to DB for this page
-        const brokenCount = brokenResults.length;
-        const brokenDetails = brokenCount > 0
-          ? `${brokenCount} broken link(s) found: ${brokenResults.slice(0, 5).map(r => `${r.url} (${r.status})`).join(', ')}${brokenCount > 5 ? ` …and ${brokenCount - 5} more` : ''}`
-          : 'No broken links detected on this page.';
-
-        await prisma.seoIssue.create({
-          data: {
-            scanId,
-            pageId: page.id,
-            checkType: 'broken_links',
-            passed: brokenCount === 0,
-            severity: brokenCount > 0 ? 'FAILED' : 'WARNING',
-            details: brokenDetails,
-          } as any,
-        });
-
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
-          console.warn(`[Crawler] Timeout: ${currentUrl}`);
-        } else {
-          console.warn(`[Crawler] Error on ${currentUrl}: ${error.message}`);
-        }
+        html = await smartFetch(currentUrl, controller);
+      } finally {
+        clearTimeout(timeout);
       }
-    })
-  );
 
-  return newlyDiscovered;
+      if (!html) {
+        // Page failed to fetch — mark for retry
+        failedUrls.push(currentUrl);
+        continue;
+      }
+
+      const $ = cheerio.load(html);
+
+      // --- Content Extraction ---
+      const title = $('title').text().trim() || null;
+      const metaDesc = $('meta[name="description"]').attr('content')?.trim() || null;
+      const h1 = $('h1').first().text().trim() || null;
+
+      const $bodyClone = $('body').clone();
+      $bodyClone.find('script, style, noscript, svg').remove();
+      const textContent = $bodyClone.text().replace(/\s+/g, ' ').trim().substring(0, 10000) || null;
+
+      // --- SEO Rules Evaluation ---
+      const issues: CrawledPage['issues'] = [];
+      for (const rule of seoRules) {
+        const result = rule.evaluate($, currentUrl);
+        issues.push({
+          ruleId: rule.id,
+          passed: result.passed,
+          severity: result.severity,
+          details: result.details,
+        });
+      }
+
+      // --- Persist to DB ---
+      const page = await prisma.page.upsert({
+        where: { websiteId_url: { websiteId, url: currentUrl } },
+        update: { title, metaDesc, h1, textContent },
+        create: { websiteId, url: currentUrl, title, metaDesc, h1, textContent },
+      });
+
+      await prisma.seoIssue.createMany({
+        data: issues.map(issue => ({
+          scanId,
+          pageId: page.id,
+          checkType: issue.ruleId,
+          passed: issue.passed,
+          severity: issue.severity === 'ERROR' ? 'FAILED' : 'WARNING',
+          details: issue.details,
+        })) as any,
+      });
+
+      // --- Collect all links for broken-link checking + discovery ---
+      const allHrefs: string[] = [];
+      $('a[href]').each((_, el) => {
+        const href = $(el).attr('href');
+        if (!href) return;
+        // Skip non-HTTP schemes (mailto, tel, javascript, #hash only)
+        if (/^(mailto:|tel:|javascript:|#)/i.test(href.trim())) return;
+        const absoluteUrl = normalizeUrl(websiteUrl, href);
+        if (absoluteUrl) allHrefs.push(absoluteUrl);
+      });
+
+      // --- Discover new internal links ---
+      for (const absoluteUrl of allHrefs) {
+        try {
+          const linkHostname = new URL(absoluteUrl).hostname;
+          if (linkHostname === startHostname && !visited.has(absoluteUrl)) {
+            newlyDiscovered.push(absoluteUrl);
+          }
+        } catch { /* ignore malformed URLs */ }
+      }
+
+      // --- Check for broken links ---
+      const uniqueLinks = [...new Set(allHrefs)];
+      const linksToCheck = uniqueLinks
+        .filter(u => !visited.has(u) || linkStatusCache.has(u))
+        .slice(0, 30); // Cap at 30 to stay within Vercel execution limits
+
+      // Check links in batches of 10 to avoid connection overload
+      const brokenResults: { url: string; status: number | string }[] = [];
+      for (let i = 0; i < linksToCheck.length; i += 10) {
+        const linkBatch = linksToCheck.slice(i, i + 10);
+        const batchResults = (await Promise.all(
+          linkBatch.map(u => checkLink(u, linkStatusCache))
+        )).filter(Boolean) as { url: string; status: number | string }[];
+        brokenResults.push(...batchResults);
+      }
+
+      // Save broken_links issue to DB for this page
+      const brokenCount = brokenResults.length;
+      const brokenDetails = brokenCount > 0
+        ? `${brokenCount} broken link(s) found: ${brokenResults.slice(0, 5).map(r => `${r.url} (${r.status})`).join(', ')}${brokenCount > 5 ? ` …and ${brokenCount - 5} more` : ''}`
+        : 'No broken links detected on this page.';
+
+      await prisma.seoIssue.create({
+        data: {
+          scanId,
+          pageId: page.id,
+          checkType: 'broken_links',
+          passed: brokenCount === 0,
+          severity: brokenCount > 0 ? 'FAILED' : 'WARNING',
+          details: brokenDetails,
+        } as any,
+      });
+
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.warn(`[Crawler] Timeout: ${currentUrl}`);
+      } else {
+        console.warn(`[Crawler] Error on ${currentUrl}: ${error.message}`);
+      }
+      failedUrls.push(currentUrl);
+    }
+  }
+
+  return { discovered: newlyDiscovered, failed: failedUrls };
 }
 
 // ---------------------------------------------------------------------------
@@ -663,10 +674,11 @@ export async function processCrawlChunk(
   }
 
   const visited = new Set<string>(scannedUrls);
+  const retriedUrls = new Set<string>(); // Track URLs that have been retried once
   const linkStatusCache = new Map<string, number | 'timeout' | 'error' | 'soft404'>();
   let pagesCrawledThisChunk = 0;
 
-  // Process URLs in parallel batches of `concurrency` until chunk is full
+  // Process URLs sequentially (concurrency=1) to stay within Vercel limits
   while (pendingUrls.length > 0 && pagesCrawledThisChunk < maxChunkSize) {
     // Dequeue the next batch (up to `concurrency` URLs)
     const remaining = maxChunkSize - pagesCrawledThisChunk;
@@ -684,10 +696,8 @@ export async function processCrawlChunk(
 
     if (batch.length === 0) continue;
 
-    pagesCrawledThisChunk += batch.length;
-
-    // Crawl this batch in parallel
-    const discovered = await crawlBatch(
+    // Crawl this batch (now sequential inside crawlBatch)
+    const { discovered, failed } = await crawlBatch(
       batch,
       scan.id,
       scan.websiteId,
@@ -696,6 +706,21 @@ export async function processCrawlChunk(
       visited,
       linkStatusCache,
     );
+
+    // Only count successfully crawled pages
+    pagesCrawledThisChunk += (batch.length - failed.length);
+
+    // Re-queue failed URLs for ONE retry (remove from visited so they can be retried)
+    for (const url of failed) {
+      visited.delete(url); // Remove from visited so it can be re-attempted
+      if (!retriedUrls.has(url)) {
+        retriedUrls.add(url); // Mark as retried so we don't retry infinitely
+        pendingUrls.push(url); // Put back in queue
+        console.warn(`[Crawler] Re-queuing failed URL for retry: ${url}`);
+      } else {
+        console.warn(`[Crawler] Permanently skipping URL after 2 failures: ${url}`);
+      }
+    }
 
     // Add newly discovered URLs to the queue (deduplicated)
     for (const url of discovered) {
