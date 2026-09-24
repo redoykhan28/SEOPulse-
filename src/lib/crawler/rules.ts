@@ -518,7 +518,7 @@ export const seoRules: SEORule[] = [
       let placeholderOnlyCount = 0;
 
       // Helper to determine if an element actually provides accessible text
-      const hasAccessibleText = (el: cheerio.Cheerio) => {
+      const hasAccessibleText = (el: any) => {
         if (!el || el.length === 0) return false;
         if (el.text().trim().length > 0) return true; // Has text
         if (el.find('img[alt]').filter((_: any, img: any) => ($(img).attr('alt') || '').trim() !== '').length > 0) return true; // Has image with alt
