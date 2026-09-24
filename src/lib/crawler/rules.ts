@@ -446,7 +446,7 @@ export const seoRules: SEORule[] = [
     category: 'Accessibility',
     evaluate: ($) => {
       // Exclude images inside <template>, <noscript>, <script> — they're not rendered
-      const images = $('img').filter((_, el) =>
+      const images = $('img').filter((_: any, el: any) =>
         $(el).closest('template, noscript, script').length === 0
       );
 
@@ -462,7 +462,7 @@ export const seoRules: SEORule[] = [
       let missingAltCount = 0;
       const missingUrls: string[] = [];
 
-      images.each((_, el) => {
+      images.each((_: any, el: any) => {
         const alt = $(el).attr('alt');
         if (alt === undefined || alt === null || alt.trim() === '') {
           // Collect src from common lazy-loading attributes
@@ -521,13 +521,13 @@ export const seoRules: SEORule[] = [
       const hasAccessibleText = (el: cheerio.Cheerio) => {
         if (!el || el.length === 0) return false;
         if (el.text().trim().length > 0) return true; // Has text
-        if (el.find('img[alt]').filter((_, img) => ($(img).attr('alt') || '').trim() !== '').length > 0) return true; // Has image with alt
+        if (el.find('img[alt]').filter((_: any, img: any) => ($(img).attr('alt') || '').trim() !== '').length > 0) return true; // Has image with alt
         if (el.find('svg title').length > 0) return true; // Has SVG title
         if (el.attr('aria-label')?.trim()) return true; // Has aria-label itself
         return false;
       };
 
-      inputs.each((_, el) => {
+      inputs.each((_: any, el: any) => {
         const id = $(el).attr('id');
         const ariaLabel = $(el).attr('aria-label')?.trim();
         const ariaLabelledby = $(el).attr('aria-labelledby')?.trim();
@@ -611,13 +611,13 @@ export const seoRules: SEORule[] = [
       const links = $('a[href]');
       let emptyCount = 0;
 
-      links.each((_, el) => {
+      links.each((_: any, el: any) => {
         const text = $(el).text().trim();
         const ariaLabel = $(el).attr('aria-label')?.trim();
         const ariaLabelledby = $(el).attr('aria-labelledby')?.trim();
         const title = $(el).attr('title')?.trim();
         // Image with meaningful alt text inside the link is accessible
-        const imgWithAlt = $(el).find('img[alt]').filter((_, img) => ($(img).attr('alt') || '').trim() !== '').length > 0;
+        const imgWithAlt = $(el).find('img[alt]').filter((_: any, img: any) => ($(img).attr('alt') || '').trim() !== '').length > 0;
         // SVG with a <title> child is accessible
         const svgWithTitle = $(el).find('svg title').length > 0;
         // aria-label on the SVG itself
