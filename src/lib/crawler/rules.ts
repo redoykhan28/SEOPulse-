@@ -508,31 +508,73 @@ export const seoRules: SEORule[] = [
     name: 'Form Input Labels',
     category: 'Accessibility',
     evaluate: ($) => {
+      // FIX: Included type="range" and type="color" as they require labels per WCAG
       const inputs = $(
-        'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="range"]):not([type="color"]), textarea, select'
+        'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), textarea, select'
       );
       if (inputs.length === 0) return { passed: true, severity: 'INFO', details: 'No form inputs found on this page.', weight: 5 };
 
       let missingLabelCount = 0;
       let placeholderOnlyCount = 0;
 
+      // Helper to determine if an element actually provides accessible text
+      const hasAccessibleText = (el: cheerio.Cheerio) => {
+        if (!el || el.length === 0) return false;
+        if (el.text().trim().length > 0) return true; // Has text
+        if (el.find('img[alt]').filter((_, img) => ($(img).attr('alt') || '').trim() !== '').length > 0) return true; // Has image with alt
+        if (el.find('svg title').length > 0) return true; // Has SVG title
+        if (el.attr('aria-label')?.trim()) return true; // Has aria-label itself
+        return false;
+      };
+
       inputs.each((_, el) => {
         const id = $(el).attr('id');
-        const ariaLabel = $(el).attr('aria-label');
-        const ariaLabelledby = $(el).attr('aria-labelledby');
-        const titleAttr = $(el).attr('title');
-        const placeholder = $(el).attr('placeholder');
+        const ariaLabel = $(el).attr('aria-label')?.trim();
+        const ariaLabelledby = $(el).attr('aria-labelledby')?.trim();
+        const titleAttr = $(el).attr('title')?.trim();
+        const placeholder = $(el).attr('placeholder')?.trim();
 
-        // aria-label, aria-labelledby, or title are all valid accessible labels
-        if (ariaLabel || ariaLabelledby || titleAttr) return;
+        // 1. Check aria-label
+        if (ariaLabel) return; // Passed
 
-        // <label for="id"> association
-        if (id && $(`label[for="${id}"]`).length > 0) return;
+        // 2. Check aria-labelledby AND verify the referenced element exists & has text
+        if (ariaLabelledby) {
+          const targetIds = ariaLabelledby.split(/\\s+/);
+          let hasTargetText = false;
+          for (const targetId of targetIds) {
+            // Escape the ID for jQuery/Cheerio selector just in case
+            try {
+              const targetEl = $(`#${targetId.replace(/([!"#$%&'()*+,./:;<=>?@\\[\\\\\\]^`{|}~])/g, '\\\\$1')}`);
+              if (hasAccessibleText(targetEl)) {
+                hasTargetText = true;
+                break;
+              }
+            } catch { /* ignore invalid selectors */ }
+          }
+          if (hasTargetText) return; // Passed
+        }
 
-        // Input wrapped in <label>
-        if ($(el).closest('label').length > 0) return;
+        // 3. Check title attribute
+        if (titleAttr) return; // Passed
 
-        // Only placeholder — not an accessible label
+        // 4. Check explicit <label for="id"> AND ensure it contains text
+        if (id) {
+          try {
+            const escapedId = id.replace(/([!"#$%&'()*+,./:;<=>?@\\[\\\\\\]^`{|}~])/g, '\\\\$1');
+            const explicitLabel = $(`label[for="${escapedId}"]`);
+            if (hasAccessibleText(explicitLabel)) return; // Passed
+          } catch { /* ignore invalid selectors */ }
+        }
+
+        // 5. Check implicit wrapping <label> AND ensure it contains text (excluding the input's own text/value)
+        const implicitLabel = $(el).closest('label');
+        if (implicitLabel.length > 0) {
+          const clone = implicitLabel.clone();
+          clone.find('input, select, textarea').remove(); // Strip out nested inputs to only check the label's own text
+          if (hasAccessibleText(clone)) return; // Passed
+        }
+
+        // 6. Failed all label checks. Categorize the failure.
         if (placeholder) {
           placeholderOnlyCount++;
         } else {
@@ -544,7 +586,7 @@ export const seoRules: SEORule[] = [
         return {
           passed: false,
           severity: 'WARNING',
-          details: `${missingLabelCount} input(s) have absolutely no label. Screen readers cannot identify these fields.` +
+          details: `${missingLabelCount} input(s) have missing or empty labels. Screen readers cannot identify these fields.` +
             (placeholderOnlyCount > 0 ? ` Additionally, ${placeholderOnlyCount} input(s) use placeholder-only labels which disappear on focus.` : ''),
           weight: 5,
         };
@@ -558,7 +600,7 @@ export const seoRules: SEORule[] = [
         };
       }
 
-      return { passed: true, severity: 'INFO', details: `All ${inputs.length} form input(s) have proper accessible labels.`, weight: 5 };
+      return { passed: true, severity: 'INFO', details: `All ${inputs.length} form input(s) have proper, non-empty accessible labels.`, weight: 5 };
     }
   },
   {
