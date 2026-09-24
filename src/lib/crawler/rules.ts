@@ -220,77 +220,223 @@ export const seoRules: SEORule[] = [
     name: 'Schema Markup',
     category: 'Technical',
     evaluate: ($) => {
-      const schemas = $('script[type="application/ld+json"]');
-      if (schemas.length === 0) return { passed: false, severity: 'WARNING', details: 'No JSON-LD schema markup found. Schema helps Google show rich results (stars, prices, FAQs).', weight: 10 };
+      // ─── RICH RESULT ELIGIBLE TYPES & THEIR REQUIRED PROPERTIES ───
+      // Source: https://developers.google.com/search/docs/appearance/structured-data
+      const RICH_RESULT_TYPES: Record<string, { required: string[]; label: string }> = {
+        'Article':        { required: ['headline', 'author', 'datePublished'],               label: 'Article (News / Blog)' },
+        'NewsArticle':    { required: ['headline', 'author', 'datePublished'],               label: 'News Article' },
+        'BlogPosting':    { required: ['headline', 'author', 'datePublished'],               label: 'Blog Post' },
+        'Product':        { required: ['name'],                                              label: 'Product (Shopping)' },
+        'FAQPage':        { required: ['mainEntity'],                                        label: 'FAQ (Expandable Q&A)' },
+        'HowTo':          { required: ['name', 'step'],                                      label: 'How-To (Step-by-step)' },
+        'Recipe':         { required: ['name', 'recipeIngredient'],                           label: 'Recipe' },
+        'Event':          { required: ['name', 'startDate', 'location'],                     label: 'Event' },
+        'LocalBusiness':  { required: ['name', 'address'],                                   label: 'Local Business' },
+        'Organization':   { required: ['name'],                                              label: 'Organization' },
+        'BreadcrumbList': { required: ['itemListElement'],                                   label: 'Breadcrumb Navigation' },
+        'VideoObject':    { required: ['name', 'uploadDate', 'thumbnailUrl'],                label: 'Video' },
+        'Review':         { required: ['itemReviewed', 'author'],                            label: 'Review' },
+        'JobPosting':     { required: ['title', 'datePosted', 'hiringOrganization'],         label: 'Job Posting' },
+        'Course':         { required: ['name', 'provider'],                                  label: 'Course' },
+        'WebSite':        { required: ['name'],                                              label: 'Website Info' },
+        'WebPage':        { required: ['name'],                                              label: 'Web Page Info' },
+      };
 
+      // Types that can trigger Google rich results (stars, carousels, etc.)
+      const RICH_ELIGIBLE = new Set([
+        'Article', 'NewsArticle', 'BlogPosting', 'Product', 'FAQPage', 'HowTo',
+        'Recipe', 'Event', 'LocalBusiness', 'BreadcrumbList', 'VideoObject',
+        'Review', 'JobPosting', 'Course',
+      ]);
+
+      // ─── 1. DETECT JSON-LD ───
+      const schemas = $('script[type="application/ld+json"]');
       let validCount = 0;
       let malformedCount = 0;
-      let missingTypeCount = 0;
-      const types = new Set<string>();
+      let missingContextCount = 0;
+      const allTypes: string[] = [];
+      const duplicateTypes: string[] = [];
+      const missingProps: string[] = [];
+      const richEligible: string[] = [];
+      const nonRichTypes: string[] = [];
 
-      schemas.each((_, el) => {
+      schemas.each((_: any, el: any) => {
         const rawJson = $(el).html()?.trim() || '';
-        // Skip completely empty blocks (e.g. <script type="application/ld+json"></script>)
         if (!rawJson) return;
 
         try {
           const parsed = JSON.parse(rawJson);
 
-          // Helper to recursively find all @type values
-          const extractTypes = (obj: any) => {
+          // ─── @context validation ───
+          const checkContext = (obj: any): boolean => {
+            if (!obj || typeof obj !== 'object') return false;
+            const ctx = obj['@context'];
+            if (ctx) {
+              const ctxStr = typeof ctx === 'string' ? ctx : JSON.stringify(ctx);
+              return ctxStr.toLowerCase().includes('schema.org');
+            }
+            return false;
+          };
+
+          if (!checkContext(parsed)) {
+            missingContextCount++;
+          }
+
+          // ─── Recursively extract @type values and validate required properties ───
+          const extractAndValidate = (obj: any) => {
             if (!obj || typeof obj !== 'object') return;
+
             if (obj['@type']) {
-              if (Array.isArray(obj['@type'])) {
-                obj['@type'].forEach((t: any) => types.add(String(t)));
-              } else {
-                types.add(String(obj['@type']));
+              const typeValues = Array.isArray(obj['@type']) ? obj['@type'] : [obj['@type']];
+              for (const t of typeValues) {
+                const typeStr = String(t);
+                allTypes.push(typeStr);
+
+                // Check required properties for known types
+                const spec = RICH_RESULT_TYPES[typeStr];
+                if (spec) {
+                  const missing = spec.required.filter((prop: string) => {
+                    const val = obj[prop];
+                    return val === undefined || val === null || val === '';
+                  });
+                  if (missing.length > 0) {
+                    missingProps.push(`"${spec.label}" is missing: ${missing.join(', ')}`);
+                  }
+                }
+
+                // Categorize as rich-result eligible or informational
+                if (RICH_ELIGIBLE.has(typeStr)) {
+                  richEligible.push(spec?.label || typeStr);
+                } else {
+                  nonRichTypes.push(spec?.label || typeStr);
+                }
               }
             }
+
             if (Array.isArray(obj['@graph'])) {
-              obj['@graph'].forEach((g: any) => extractTypes(g));
+              obj['@graph'].forEach((g: any) => extractAndValidate(g));
             } else {
-              // Check object values recursively just in case it's nested without @graph
-              Object.values(obj).forEach(val => extractTypes(val));
+              for (const val of Object.values(obj)) {
+                if (val && typeof val === 'object' && !Array.isArray(val) && (val as any)['@type']) {
+                  extractAndValidate(val);
+                }
+              }
             }
           };
 
-          const sizeBefore = types.size;
-          extractTypes(parsed);
-
-          if (types.size > sizeBefore) {
-            validCount++;
-          } else {
-            // Only count as "missing type" if it actually contains data (not just {})
-            if (Object.keys(parsed).length > 0) {
-              missingTypeCount++;
-            }
-          }
+          extractAndValidate(parsed);
+          validCount++;
         } catch {
           malformedCount++;
         }
       });
 
-      const typeList = Array.from(types);
-      const displayTypes = typeList.slice(0, 5).join(', ') + (typeList.length > 5 ? ` (+${typeList.length - 5} more)` : '');
+      // ─── 2. DETECT MICRODATA (itemscope/itemtype) ───
+      const microdataEls = $('[itemscope][itemtype]');
+      const microdataTypes: string[] = [];
+      microdataEls.each((_: any, el: any) => {
+        const itemtype = $(el).attr('itemtype') || '';
+        const match = itemtype.match(/schema\.org\/(\w+)/i);
+        if (match) microdataTypes.push(match[1]);
+      });
 
-      if (malformedCount > 0) {
-        let msg = `${malformedCount} JSON-LD block(s) contain malformed JSON (syntax error).`;
-        if (validCount > 0) msg += ` Found valid schemas: ${displayTypes}.`;
+      // ─── 3. DETECT RDFa (typeof/vocab) ───
+      const rdfaEls = $('[typeof]');
+      const rdfaTypes: string[] = [];
+      rdfaEls.each((_: any, el: any) => {
+        const typeofVal = $(el).attr('typeof') || '';
+        if (typeofVal) rdfaTypes.push(typeofVal);
+      });
+
+      // ─── 4. CHECK FOR DUPLICATE TYPES ───
+      const typeCounts = new Map<string, number>();
+      for (const t of allTypes) {
+        typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+      }
+      for (const [type, count] of typeCounts) {
+        if (count > 1 && !['WebPage', 'WebSite', 'BreadcrumbList', 'ListItem'].includes(type)) {
+          duplicateTypes.push(`"${type}" appears ${count} times`);
+        }
+      }
+
+      // ─── BUILD USER-FRIENDLY RESULT ───
+      const uniqueTypes = [...new Set(allTypes)];
+      const hasJsonLd = validCount > 0;
+      const hasMicrodata = microdataTypes.length > 0;
+      const hasRdfa = rdfaTypes.length > 0;
+      const hasAnySchema = hasJsonLd || hasMicrodata || hasRdfa;
+
+      // NO SCHEMA AT ALL
+      if (!hasAnySchema && malformedCount === 0) {
+        return {
+          passed: false,
+          severity: 'WARNING',
+          details: 'No structured data found on this page (no JSON-LD, Microdata, or RDFa). ' +
+            'Adding schema markup helps Google show rich results like star ratings, FAQ dropdowns, product prices, and event dates in search.',
+          weight: 10,
+        };
+      }
+
+      // MALFORMED JSON
+      if (malformedCount > 0 && validCount === 0) {
+        let msg = `${malformedCount} JSON-LD block(s) have broken JSON syntax — Google will ignore them entirely. Fix the JSON errors in your page source.`;
+        if (hasMicrodata) msg += ` However, Microdata was detected (${microdataTypes.join(', ')}).`;
         return { passed: false, severity: 'ERROR', details: msg, weight: 7 };
       }
 
-      if (validCount === 0) {
-        if (missingTypeCount > 0) {
-          return { passed: false, severity: 'WARNING', details: `Found JSON-LD block(s), but they are missing the '@type' property. Valid schema requires a @type.`, weight: 5 };
-        }
-        return { passed: false, severity: 'WARNING', details: 'No valid JSON-LD schema markup found (blocks are empty).', weight: 10 };
+      // BUILD DETAILED REPORT
+      const parts: string[] = [];
+
+      if (hasJsonLd && uniqueTypes.length > 0) {
+        const displayTypes = uniqueTypes.slice(0, 6).join(', ') + (uniqueTypes.length > 6 ? ` (+${uniqueTypes.length - 6} more)` : '');
+        parts.push(`JSON-LD: ${displayTypes}`);
+      }
+      if (hasMicrodata) {
+        parts.push(`Microdata: ${[...new Set(microdataTypes)].join(', ')}`);
+      }
+      if (hasRdfa) {
+        parts.push(`RDFa: ${[...new Set(rdfaTypes)].join(', ')}`);
       }
 
-      if (missingTypeCount > 0) {
-        return { passed: true, severity: 'INFO', details: `Found valid schema(s) (${displayTypes}), but ${missingTypeCount} block(s) are missing '@type'. (Often caused by plugins).`, weight: 5 };
+      // Rich result eligibility
+      const uniqueRich = [...new Set(richEligible)];
+      if (uniqueRich.length > 0) {
+        parts.push(`Rich result eligible: ${uniqueRich.join(', ')}`);
       }
 
-      return { passed: true, severity: 'INFO', details: `Found valid JSON-LD schema(s): ${displayTypes}.`, weight: 10 };
+      // Warnings section
+      const warnings: string[] = [];
+
+      if (malformedCount > 0) {
+        warnings.push(`${malformedCount} JSON-LD block(s) have broken syntax`);
+      }
+      if (missingContextCount > 0 && validCount > 0) {
+        warnings.push(`${missingContextCount} block(s) missing @context — add "@context": "https://schema.org" so Google can read it`);
+      }
+      if (duplicateTypes.length > 0) {
+        warnings.push(`Duplicate schemas found: ${duplicateTypes.join('; ')} — this may confuse Google`);
+      }
+      if (missingProps.length > 0) {
+        const displayMissing = missingProps.slice(0, 3);
+        warnings.push(`Incomplete schemas: ${displayMissing.join('. ')}${missingProps.length > 3 ? ` (+${missingProps.length - 3} more)` : ''}`);
+      }
+
+      // DECIDE PASS/FAIL
+      if (warnings.length > 0) {
+        return {
+          passed: false,
+          severity: missingProps.length > 0 || missingContextCount > 0 ? 'WARNING' : 'INFO',
+          details: `${parts.join(' | ')}. Issues: ${warnings.join('. ')}.`,
+          weight: 8,
+        };
+      }
+
+      return {
+        passed: true,
+        severity: 'INFO',
+        details: `${parts.join(' | ')}.`,
+        weight: 10,
+      };
     }
   },
   {
@@ -539,12 +685,12 @@ export const seoRules: SEORule[] = [
 
         // 2. Check aria-labelledby AND verify the referenced element exists & has text
         if (ariaLabelledby) {
-          const targetIds = ariaLabelledby.split(/\\s+/);
+          const targetIds = ariaLabelledby.split(/\s+/);
           let hasTargetText = false;
           for (const targetId of targetIds) {
-            // Escape the ID for jQuery/Cheerio selector just in case
             try {
-              const targetEl = $(`#${targetId.replace(/([!"#$%&'()*+,./:;<=>?@\\[\\\\\\]^`{|}~])/g, '\\\\$1')}`);
+              // Use simple attribute selector to avoid CSS escaping issues in Node.js
+              const targetEl = $(`[id="${targetId}"]`);
               if (hasAccessibleText(targetEl)) {
                 hasTargetText = true;
                 break;
@@ -560,8 +706,7 @@ export const seoRules: SEORule[] = [
         // 4. Check explicit <label for="id"> AND ensure it contains text
         if (id) {
           try {
-            const escapedId = id.replace(/([!"#$%&'()*+,./:;<=>?@\\[\\\\\\]^`{|}~])/g, '\\\\$1');
-            const explicitLabel = $(`label[for="${escapedId}"]`);
+            const explicitLabel = $(`label[for="${id}"]`);
             if (hasAccessibleText(explicitLabel)) return; // Passed
           } catch { /* ignore invalid selectors */ }
         }
